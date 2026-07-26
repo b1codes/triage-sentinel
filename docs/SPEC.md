@@ -1,6 +1,6 @@
 # triage-sentinel — Technical Specification
 
-**Status:** Draft v1 · **Date:** 2026-07-26 · **Derived from:** [`docs/CONCEPT.md`](docs/CONCEPT.md)
+**Status:** Draft v1 · **Date:** 2026-07-26 · **Derived from:** [`CONCEPT.md`](CONCEPT.md)
 
 ---
 
@@ -1146,11 +1146,12 @@ is the constraint the entire architecture was chosen to satisfy.
 ├── testdata/                     recorded payloads, fixture repos
 ├── docs/
 │   ├── CONCEPT.md
+│   ├── SPEC.md
 │   └── superpowers/specs/
 ├── var/                          gitignored runtime state
 │   ├── sentinel.db  repos/  work/  runs/  patches/
-├── SPEC.md   README.md      (agent-instruction files are locally
-│                              generated and gitignored)
+├── README.md                     (agent-instruction files are locally
+│                                  generated and gitignored)
 ├── projects.yaml (gitignored)    projects.example.yaml
 ├── .env (gitignored)             .env.example
 └── Makefile
