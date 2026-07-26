@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-**Project Name:** `agent-noc` (Working Title)
+**Project Name:** `triage-sentinel`
 
 **Type:** Self-Healing Infrastructure Operations & Agent Orchestrator
 
