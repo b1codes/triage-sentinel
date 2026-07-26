@@ -1,0 +1,10 @@
+active_agents:
+- CLAUDE
+- ANTIGRAVITY
+bundles: {}
+clickup_list_id: null
+default_branch: null
+github_owner: null
+github_repo: null
+skillsmp_api_key: null
+upstream_repo: ''
