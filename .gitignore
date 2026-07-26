@@ -30,3 +30,15 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# b1CodingTool generated agent files
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.override.md
+.claude/
+.agents/local/
+.agents/rules/local.md
+.agents/skills/b1-rule.md
+.agents/skills/b1-edge-case.md
+.agents/skills/b1-reconcile.md
+.agents/.b1-snapshots/
