@@ -1150,11 +1150,19 @@ is the constraint the entire architecture was chosen to satisfy.
 │   └── superpowers/specs/
 ├── var/                          gitignored runtime state
 │   ├── sentinel.db  repos/  work/  runs/  patches/
-├── README.md                     (agent-instruction files are locally
-│                                  generated and gitignored)
+├── .agents/                      b1 agent-instruction sources (tracked)
+│   ├── config.yaml
+│   ├── project/AGENTS.md
+│   └── modules/{go,react-web}
+├── AGENTS.md                     generated from .agents/ (tracked)
+├── README.md
 ├── projects.yaml (gitignored)    projects.example.yaml
 ├── .env (gitignored)             .env.example
 └── Makefile
+
+Gitignored agent files: CLAUDE.md, CLAUDE.local.md, AGENTS.override.md,
+.agents/local/, .agents/rules/local.md, .agents/skills/b1-*.md, and
+.agents/.b1-snapshots/ — per-machine or generated, never committed.
 ```
 
 `make` targets: `build`, `dev`, `test`, `lint`, `web`, `migrate`, `run`, `prune`, `reconcile`.
