@@ -7,6 +7,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	// Embed the IANA timezone database into the binary so time.LoadLocation
+	// (used to resolve SENTINEL_TIMEZONE) does not depend on the host having
+	// /usr/share/zoneinfo, even though the binary is built with CGO_ENABLED=0.
+	_ "time/tzdata"
 )
 
 func main() {

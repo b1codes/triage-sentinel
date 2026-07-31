@@ -134,7 +134,7 @@ func (db *DB) Path() string { return db.path }
 func (db *DB) SizeBytes() (int64, error) {
 	info, err := os.Stat(db.path)
 	if err != nil {
-		return 0, fmt.Errorf("stat %s: %w", db.path, err)
+		return 0, fmt.Errorf("checking database size: %w", err)
 	}
 	return info.Size(), nil
 }

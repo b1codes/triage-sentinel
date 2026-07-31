@@ -17,15 +17,18 @@ export interface SessionResponse {
   authenticated: boolean
 }
 
-async function getJSON<T>(path: string): Promise<T> {
+async function getJSON<T>(path: string, alsoAcceptable: number[] = []): Promise<T> {
   const res = await fetch(path, { credentials: 'same-origin' })
-  if (!res.ok) {
+  if (!res.ok && !alsoAcceptable.includes(res.status)) {
     throw new Error(`${path} returned ${res.status}`)
   }
   return (await res.json()) as T
 }
 
-export const getHealth = () => getJSON<HealthResponse>('/api/health')
+// /api/health deliberately responds 503 with a full HealthResponse body
+// (status "degraded", populated problems) when a check fails, so 503 is a
+// valid, parseable response here rather than an error.
+export const getHealth = () => getJSON<HealthResponse>('/api/health', [503])
 export const getSession = () => getJSON<SessionResponse>('/api/session')
 
 export async function login(password: string): Promise<void> {
