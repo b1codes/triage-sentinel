@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.b1codes.sentinel</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__INSTALL_DIR__/bin/sentinel</string>
+    <string>serve</string>
+    <string>--env-file</string>
+    <string>__INSTALL_DIR__/.env</string>
+    <string>--config</string>
+    <string>__INSTALL_DIR__/projects.yaml</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__INSTALL_DIR__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on a crash, but never after a clean shutdown: KeepAlive: true
+       would relaunch the service immediately after a deliberate
+       `launchctl bootout`, making it impossible to stop. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- Minimum seconds between relaunches; stops a crash loop from spinning. -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__INSTALL_DIR__/var/log/sentinel.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__INSTALL_DIR__/var/log/sentinel.err.log</string>
+
+  <!-- Long-running background work: lower scheduling and I/O priority so the
+       control plane never competes with an agent's test run for the 8 GB host. -->
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+
+  <!-- Secrets are NOT set here: a plist is world-readable. They live in the
+       chmod 600 .env passed via --env-file (SPEC §14). -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>

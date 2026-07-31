@@ -4,7 +4,7 @@ VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 LDFLAGS     := -s -w -X $(PKG)/internal/version.Version=$(VERSION)
 DATA_DIR    ?= ./var
 
-.PHONY: all build web test lint vet fmt fmt-check check dev run migrate clean
+.PHONY: all build web test lint vet fmt fmt-check check dev run migrate clean install-service uninstall-service service-status logs
 
 all: check build
 
@@ -57,3 +57,19 @@ clean:
 	rm -rf bin internal/webassets/dist
 	mkdir -p internal/webassets/dist
 	touch internal/webassets/dist/.gitkeep
+
+## install-service: install and start the LaunchAgent
+install-service: build
+	./deploy/launchd/install.sh
+
+## uninstall-service: stop and remove the LaunchAgent
+uninstall-service:
+	./deploy/launchd/uninstall.sh
+
+## service-status: show launchd's view of the service
+service-status:
+	@launchctl print gui/$$(id -u)/com.b1codes.sentinel | sed -n '1,20p'
+
+## logs: follow the service logs
+logs:
+	tail -f $(DATA_DIR)/log/sentinel.out.log $(DATA_DIR)/log/sentinel.err.log
