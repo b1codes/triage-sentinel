@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -115,6 +116,70 @@ func TestConcurrentWritesDoNotReturnBusy(t *testing.T) {
 	}
 	if want := writers * perWriter; count != want {
 		t.Errorf("row count = %d, want %d", count, want)
+	}
+}
+
+// TestConcurrentReadersAndWritersDoNotBlock runs writer and reader goroutines
+// against the live WAL file at the same time — not sequentially like
+// TestConcurrentWritesDoNotReturnBusy, which drains all writes before issuing a
+// single read. WAL mode is supposed to let readers proceed against a snapshot
+// while a writer commits, and busy_timeout is supposed to absorb any residual
+// contention rather than surface SQLITE_BUSY. This test exercises that
+// simultaneously, under -race, to prove it rather than assume it.
+func TestConcurrentReadersAndWritersDoNotBlock(t *testing.T) {
+	db := openTemp(t)
+
+	if _, err := db.Writer().Exec(`CREATE TABLE rw (id INTEGER PRIMARY KEY, v TEXT NOT NULL)`); err != nil {
+		t.Fatalf("creating table: %v", err)
+	}
+
+	const writers = 10
+	const insertsPerWriter = 25
+	const readers = 10
+	const readsPerReader = 50
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, writers*insertsPerWriter+readers*readsPerReader)
+
+	// Start readers and writers together under one WaitGroup so both kinds of
+	// goroutines are in flight before wg.Wait() below — that's what forces
+	// reads to land while writes are still happening, rather than after.
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < insertsPerWriter; i++ {
+				if _, err := db.Writer().Exec(`INSERT INTO rw (v) VALUES (?)`, "x"); err != nil {
+					errCh <- fmt.Errorf("write: %w", err)
+				}
+			}
+		}()
+	}
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < readsPerReader; i++ {
+				var count int
+				if err := db.Reader().QueryRow(`SELECT count(*) FROM rw`).Scan(&count); err != nil {
+					errCh <- fmt.Errorf("read: %w", err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("concurrent reader/writer traffic failed: %v", err)
+	}
+
+	var count int
+	if err := db.Reader().QueryRow(`SELECT count(*) FROM rw`).Scan(&count); err != nil {
+		t.Fatalf("counting rows: %v", err)
+	}
+	if want := writers * insertsPerWriter; count != want {
+		t.Errorf("final row count = %d, want %d", count, want)
 	}
 }
 
