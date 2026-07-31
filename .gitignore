@@ -42,3 +42,17 @@ AGENTS.override.md
 .agents/skills/b1-edge-case.md
 .agents/skills/b1-reconcile.md
 .agents/.b1-snapshots/
+
+# Build output
+/bin/
+
+# Runtime state (SPEC §13)
+/var/
+
+# Frontend
+/web/node_modules/
+/internal/webassets/dist/*
+!/internal/webassets/dist/.gitkeep
+
+# Local configuration
+/projects.yaml
