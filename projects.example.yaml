@@ -1,0 +1,89 @@
+# Copy to projects.yaml (gitignored) and replace the example projects with
+# your own. Validated on startup; the binary refuses to run on any error
+# (SPEC §4.1). Verify with: go run ./cmd/sentinel validate
+version: 1
+
+budgets:
+  per_incident_usd: 1.00
+  daily:
+    global: { soft: 7, hard: 10 }
+    per_project: { hard: 2 }
+  weekly:
+    global: { soft: 35, hard: 50 }
+  monthly:
+    global: { soft: 110, hard: 150 }
+  week_starts_on: monday
+  efficiency:
+    enabled: true
+    window: week
+    max_cost_per_resolution_multiple: 3.0
+    min_resolutions_for_signal: 5
+  forecast:
+    enabled: true
+    warn_at_fraction_of_hard: 0.9
+
+soft_mode:
+  park_tier2: true
+  downgrade_model: false
+  force_pr_only: false
+  min_confidence: null
+
+defaults:
+  autonomy: pr_only
+  tier1_model: claude-haiku-4-5
+  tier2_model: claude-opus-5
+  tier2_effort: high
+  max_turns: 40
+  run_timeout: 20m
+  suppression_window: 6h
+  max_repair_attempts_per_fingerprint: 2
+  max_diff_lines: 400
+  probation_incidents: 3
+  allow_test_changes: false
+  protected_paths:
+    - ".github/**"
+    - "**/*.lock"
+    - "**/migrations/**"
+    - "**/terraform/**"
+    - "Dockerfile*"
+  commands:
+    test: make test
+    build: make build
+    healthcheck: make healthcheck
+
+runtime:
+  max_concurrent_agents: 1
+  min_free_ram_mb: 2048
+  min_free_disk_mb: 10240
+  tier2_min_confidence: 0.5
+  max_input_tokens: 40000
+
+projects:
+  - slug: example-api
+    repo: github.com/example/example-api
+    default_branch: main
+    autonomy: auto_merge
+    triggers:
+      workflow_run: true
+      issues:
+        labels: [bug, sentinel]
+      gcp_log_filter: >
+        severity>=ERROR AND
+        resource.labels.service_name="example-api"
+    commands:
+      test: make test
+      build: make build
+      healthcheck: make healthcheck
+      deploy: make deploy
+      rollback: make rollback
+    env:
+      DATABASE_URL: postgres://localhost/example_test
+
+  - slug: example-worker
+    repo: github.com/example/example-worker
+    default_branch: main
+    triggers:
+      workflow_run: true
+    daily_budget_usd: 0.75
+    suppression_window: 12h
+    tier2_model: claude-sonnet-5
