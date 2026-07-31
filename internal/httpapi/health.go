@@ -42,7 +42,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		RSSBytes:      snap.RSSBytes,
 		FreeRAMBytes:  snap.FreeRAMBytes,
 		SSEClients:    s.deps.Hub.ClientCount(),
-		Projects:      len(s.deps.Registry.Projects),
+		Projects:      len(s.Registry().Projects),
 	}
 
 	schemaVersion, err := store.SchemaVersion(r.Context(), s.deps.DB)

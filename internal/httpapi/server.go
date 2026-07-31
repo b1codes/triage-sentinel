@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/b1codes/triage-sentinel/internal/bus"
@@ -66,6 +67,10 @@ type Server struct {
 	static   http.Handler
 	sessions *sessionStore
 	log      *slog.Logger
+
+	// registry is swapped atomically on SIGHUP. A failed reload leaves the
+	// previous value in place (SPEC §4.1).
+	registry atomic.Pointer[config.Registry]
 }
 
 // NewServer validates deps, applies defaults, and builds the route table.
@@ -114,8 +119,24 @@ func NewServer(d Deps) (*Server, error) {
 			http.NotFound(w, r)
 		})
 	}
+	s.SetRegistry(d.Registry)
 	s.routes()
 	return s, nil
+}
+
+// SetRegistry atomically replaces the live project registry. Called on SIGHUP
+// after a successful reload; a reload that fails validation never reaches here,
+// so the previous registry stays in effect (SPEC §4.1).
+func (s *Server) SetRegistry(reg config.Registry) {
+	s.registry.Store(&reg)
+}
+
+// Registry returns the live project registry.
+func (s *Server) Registry() config.Registry {
+	if reg := s.registry.Load(); reg != nil {
+		return *reg
+	}
+	return config.Registry{}
 }
 
 // Handler returns the server's root handler. Requests are split by path
