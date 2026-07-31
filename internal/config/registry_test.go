@@ -170,3 +170,45 @@ projects:
 		t.Errorf("error should mention field 'suppression_window': %v", err)
 	}
 }
+
+func TestProjectCommandsTypoRegression(t *testing.T) {
+	// Regression test: typo "buld" in projects[].commands should be caught
+	// (Issue: Project.UnmarshalYAML was using valNode.Decode without strict field checking)
+	yaml := `version: 1
+projects:
+  - slug: test
+    repo: github.com/test/test
+    default_branch: main
+    commands:
+      test: make test
+      buld: make build
+`
+	_, err := ParseRegistry([]byte(yaml))
+	if err == nil {
+		t.Fatal("REGRESSION: typo 'buld' in projects[].commands was not caught")
+	}
+	if !strings.Contains(err.Error(), "buld") {
+		t.Errorf("error should mention 'buld' typo: %v", err)
+	}
+}
+
+func TestProjectTriggersTypoRegression(t *testing.T) {
+	// Regression test: typo "lables" in projects[].triggers.issues should be caught
+	// (Issue: Project.UnmarshalYAML was using valNode.Decode without strict field checking)
+	yaml := `version: 1
+projects:
+  - slug: test
+    repo: github.com/test/test
+    default_branch: main
+    triggers:
+      issues:
+        lables: [bug]
+`
+	_, err := ParseRegistry([]byte(yaml))
+	if err == nil {
+		t.Fatal("REGRESSION: typo 'lables' in projects[].triggers.issues was not caught")
+	}
+	if !strings.Contains(err.Error(), "lables") {
+		t.Errorf("error should mention 'lables' typo: %v", err)
+	}
+}

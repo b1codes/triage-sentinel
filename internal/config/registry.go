@@ -13,6 +13,28 @@ import (
 // validation.
 var ErrInvalidRegistry = errors.New("invalid project registry")
 
+// decodeStructStrict decodes a YAML node into a target struct while enforcing
+// strict field checking. This is necessary because yaml.Node.Decode() creates
+// a fresh decoder that doesn't inherit the parent Decoder's KnownFields(true)
+// setting. By manually validating known fields first, we preserve strict checking
+// for nested struct fields.
+func decodeStructStrict(node *yaml.Node, knownFields map[string]bool, target interface{}) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("expected mapping")
+	}
+
+	// Check for unknown fields
+	for i := 0; i < len(node.Content); i += 2 {
+		fieldName := node.Content[i].Value
+		if !knownFields[fieldName] {
+			return fmt.Errorf("unknown field %q", fieldName)
+		}
+	}
+
+	// Now decode with the normal decoder
+	return node.Decode(target)
+}
+
 // Duration wraps time.Duration so YAML string values such as "20m" and "6h"
 // decode correctly. gopkg.in/yaml.v3 decodes a bare time.Duration only from an
 // integer nanosecond count, which would silently misread every duration in the
@@ -102,6 +124,17 @@ type Commands struct {
 	Rollback    string `yaml:"rollback"`
 }
 
+// commandsKnownFields lists Commands' YAML keys for strict decoding via
+// decodeStructStrict, shared by ProjectDefaults.UnmarshalYAML and
+// Project.UnmarshalYAML.
+var commandsKnownFields = map[string]bool{
+	"test":        true,
+	"build":       true,
+	"healthcheck": true,
+	"deploy":      true,
+	"rollback":    true,
+}
+
 // ProjectDefaults supplies values for any project that does not override them.
 type ProjectDefaults struct {
 	Autonomy                        string   `yaml:"autonomy"`
@@ -186,8 +219,8 @@ func (pd *ProjectDefaults) UnmarshalYAML(value *yaml.Node) error {
 				return fmt.Errorf("protected_paths: %w", err)
 			}
 		case "commands":
-			// For nested struct, enforce strict field checking by validating unknown fields
-			if err := pd.decodeCommandsStrict(valNode); err != nil {
+			// Use helper to enforce strict field checking for nested Commands struct
+			if err := decodeStructStrict(valNode, commandsKnownFields, &pd.Commands); err != nil {
 				return fmt.Errorf("commands: %w", err)
 			}
 		default:
@@ -196,35 +229,6 @@ func (pd *ProjectDefaults) UnmarshalYAML(value *yaml.Node) error {
 	}
 
 	return nil
-}
-
-// decodeCommandsStrict decodes Commands with strict field checking.
-// yaml.Node.Decode() creates a fresh decoder that doesn't inherit the parent's
-// KnownFields(true) setting, so we manually validate unknown fields first.
-func (pd *ProjectDefaults) decodeCommandsStrict(node *yaml.Node) error {
-	if node.Kind != yaml.MappingNode {
-		return fmt.Errorf("expected mapping")
-	}
-
-	// Known fields in Commands struct
-	knownFields := map[string]bool{
-		"test":        true,
-		"build":       true,
-		"healthcheck": true,
-		"deploy":      true,
-		"rollback":    true,
-	}
-
-	// Check for unknown fields
-	for i := 0; i < len(node.Content); i += 2 {
-		fieldName := node.Content[i].Value
-		if !knownFields[fieldName] {
-			return fmt.Errorf("unknown field %q", fieldName)
-		}
-	}
-
-	// Now decode with the normal decoder
-	return node.Decode(&pd.Commands)
 }
 
 // IssueTrigger selects which GitHub issue labels open an incident.
@@ -237,6 +241,49 @@ type Triggers struct {
 	WorkflowRun  bool         `yaml:"workflow_run"`
 	Issues       IssueTrigger `yaml:"issues"`
 	GCPLogFilter string       `yaml:"gcp_log_filter"`
+}
+
+// issueTriggerKnownFields lists IssueTrigger's YAML keys for strict decoding.
+var issueTriggerKnownFields = map[string]bool{
+	"labels": true,
+}
+
+// UnmarshalYAML provides field-aware error messages for Triggers and enforces
+// strict field checking on the nested Issues struct, which otherwise loses
+// KnownFields(true) when decoded via yaml.Node.Decode (see decodeStructStrict).
+// NOTE: This switch must stay in sync with Triggers struct fields.
+func (t *Triggers) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("expected mapping for triggers")
+	}
+
+	*t = Triggers{}
+
+	for i := 0; i < len(value.Content); i += 2 {
+		keyNode := value.Content[i]
+		valNode := value.Content[i+1]
+
+		key := keyNode.Value
+
+		switch key {
+		case "workflow_run":
+			if err := valNode.Decode(&t.WorkflowRun); err != nil {
+				return fmt.Errorf("workflow_run: %w", err)
+			}
+		case "issues":
+			if err := decodeStructStrict(valNode, issueTriggerKnownFields, &t.Issues); err != nil {
+				return fmt.Errorf("issues: %w", err)
+			}
+		case "gcp_log_filter":
+			if err := valNode.Decode(&t.GCPLogFilter); err != nil {
+				return fmt.Errorf("gcp_log_filter: %w", err)
+			}
+		default:
+			return fmt.Errorf("unknown field %q in triggers", key)
+		}
+	}
+
+	return nil
 }
 
 // Project is one managed application. Empty scalar fields and nil pointers
@@ -258,6 +305,7 @@ type Project struct {
 }
 
 // UnmarshalYAML provides field-aware error messages for Project, especially for Duration fields.
+// NOTE: This switch must stay in sync with Project struct fields.
 func (p *Project) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind != yaml.MappingNode {
 		return fmt.Errorf("expected mapping for project")
@@ -295,7 +343,7 @@ func (p *Project) UnmarshalYAML(value *yaml.Node) error {
 				return fmt.Errorf("triggers: %w", err)
 			}
 		case "commands":
-			if err := valNode.Decode(&p.Commands); err != nil {
+			if err := decodeStructStrict(valNode, commandsKnownFields, &p.Commands); err != nil {
 				return fmt.Errorf("commands: %w", err)
 			}
 		case "env":
