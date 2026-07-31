@@ -35,6 +35,11 @@ const (
 	maxPasswordBytes = 1 << 12
 )
 
+// ErrEmptyPassword is returned by hash-password when stdin yields no
+// password, matching this codebase's convention of a package-level sentinel
+// per error case (store.ErrOpen, config.ErrInvalidEnv, httpapi.ErrDeps).
+var ErrEmptyPassword = errors.New("password must not be empty")
+
 const usage = `sentinel — self-healing agent orchestrator
 
 Usage:
@@ -163,7 +168,15 @@ func migrate(ctx context.Context, opts options, stdout io.Writer) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	applied, err := store.Migrate(ctx, db)
+	// context.Background() here for the same reason as serve()'s automatic
+	// migration: a Ctrl-C during `sentinel migrate` must not abort a migration
+	// transaction mid-flight and leave the schema half-applied. There is
+	// nothing serve-specific about that risk, so the standalone subcommand
+	// gets the same treatment rather than an unexplained asymmetry between the
+	// two call sites. SchemaVersion below stays on ctx: it is a single
+	// read-only query with no partial-write hazard, so letting Ctrl-C cut it
+	// short is fine.
+	applied, err := store.Migrate(context.Background(), db)
 	if err != nil {
 		return err
 	}
@@ -204,7 +217,7 @@ func hashPassword(stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 
 	if password == "" {
-		return errors.New("password must not be empty")
+		return ErrEmptyPassword
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -322,6 +335,18 @@ func serve(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 		log.Info("shutting down")
 	}
 
+	// http.Server.Shutdown does not cancel in-flight request contexts; it only
+	// stops accepting new connections and polls for active handlers to return
+	// on their own, up to shutdownCtx's deadline. handleStream's loop is
+	// parked in a select on r.Context().Done() (which Shutdown does not fire)
+	// and client.Events() — nothing unblocks that select until the hub closes.
+	// Closing the hub here, before calling Shutdown, releases every such
+	// handler immediately so Shutdown finds them already returned rather than
+	// polling for the full shutdownTimeout. hub.Close is idempotent, so the
+	// deferred call above is a harmless backstop for paths that return before
+	// reaching here.
+	hub.Close()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
@@ -330,9 +355,6 @@ func serve(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 		_ = httpServer.Close()
 	}
 
-	// Closing the hub releases every SSE handler still blocked on a client
-	// channel, so Shutdown's wait for in-flight requests can complete.
-	hub.Close()
 	<-reloadDone
 
 	return nil

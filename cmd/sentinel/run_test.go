@@ -3,13 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/b1codes/triage-sentinel/internal/httpapi"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -162,6 +167,155 @@ func TestRunServeShutsDownOnContextCancel(t *testing.T) {
 		}
 	case <-timeoutAfter(t):
 		t.Fatal("serve did not return within the shutdown deadline")
+	}
+}
+
+// syncBuffer is an io.Writer safe for one goroutine to write to (serve's
+// listening-address log line) while the test goroutine polls its contents.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// envFileForWithPassword is envFileFor but with a real bcrypt hash of a known
+// password, so a test can actually log in over HTTP rather than only
+// exercising format validation.
+func envFileForWithPassword(t *testing.T, dataDir, password string) string {
+	t.Helper()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt.GenerateFromPassword() error = %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), ".env")
+	body := "DASHBOARD_PASSWORD_HASH=" + string(hash) + "\n" +
+		"SENTINEL_DATA_DIR=" + dataDir + "\n" +
+		"SENTINEL_LISTEN_ADDR=127.0.0.1:0\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing env file: %v", err)
+	}
+	return path
+}
+
+var listenAddrPattern = regexp.MustCompile(`sentinel listening on http://(\S+)`)
+
+// waitForListenAddr polls out for serve's "sentinel listening on ..." line and
+// returns the address it bound (port 0 resolves to a random port, so the test
+// cannot know it up front).
+func waitForListenAddr(t *testing.T, out *syncBuffer) string {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if m := listenAddrPattern.FindStringSubmatch(out.String()); m != nil {
+			return m[1]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("serve never printed a listening address:\n%s", out.String())
+	return ""
+}
+
+// TestRunServeShutsDownPromptlyWithOpenSSEConnection guards against a
+// shutdown-ordering regression: http.Server.Shutdown does not cancel
+// in-flight request contexts, it only waits for handlers to return on their
+// own. handleStream's loop is parked in a select on client.Events(), which
+// only unblocks when the bus hub closes. If hub.Close() ran after
+// Shutdown(shutdownCtx) returned (as it did in an earlier version of serve),
+// an open dashboard SSE connection would make every SIGTERM/SIGINT hang for
+// the full 15s shutdownTimeout instead of exiting promptly — the normal
+// operating mode, since a dashboard tab is usually open. This test opens a
+// real SSE connection through the full HTTP stack and asserts shutdown
+// completes in well under 15s.
+func TestRunServeShutsDownPromptlyWithOpenSSEConnection(t *testing.T) {
+	dataDir := t.TempDir()
+	const password = "sse-shutdown-test-password"
+	envFile := envFileForWithPassword(t, dataDir, password)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var stdout syncBuffer
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run(ctx, []string{
+			"serve", "-env-file", envFile, "-config", "../../projects.example.yaml",
+		}, &stdout, &bytes.Buffer{})
+	}()
+
+	addr := waitForListenAddr(t, &stdout)
+	base := "http://" + addr
+
+	client := &http.Client{}
+
+	loginResp, err := client.Post(base+"/api/login", "application/json",
+		strings.NewReader(`{"password":"`+password+`"}`))
+	if err != nil {
+		t.Fatalf("login request: %v", err)
+	}
+	_ = loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("login status = %d, want %d", loginResp.StatusCode, http.StatusNoContent)
+	}
+
+	var session *http.Cookie
+	for _, c := range loginResp.Cookies() {
+		if c.Name == httpapi.SessionCookieName {
+			session = c
+		}
+	}
+	if session == nil {
+		t.Fatal("login response carried no session cookie")
+	}
+
+	streamReq, err := http.NewRequest(http.MethodGet, base+"/api/stream", nil)
+	if err != nil {
+		t.Fatalf("building stream request: %v", err)
+	}
+	streamReq.AddCookie(session)
+
+	streamResp, err := client.Do(streamReq)
+	if err != nil {
+		t.Fatalf("opening SSE stream: %v", err)
+	}
+	defer func() { _ = streamResp.Body.Close() }()
+	if streamResp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status = %d, want %d", streamResp.StatusCode, http.StatusOK)
+	}
+
+	// handleStream flushes headers synchronously before entering its blocking
+	// select, and client.Do above already returned after headers arrived, so
+	// the handler goroutine is now parked in the select on client.Events().
+	// A short grace period absorbs any remaining scheduling slack.
+	time.Sleep(50 * time.Millisecond)
+
+	start := time.Now()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("serve returned %v on shutdown with an open SSE connection, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not shut down within 5s with an open SSE connection " +
+			"(want well under the 15s shutdownTimeout; hub.Close() may be running after Shutdown() again)")
+	}
+
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("shutdown with an open SSE connection took %v, want well under the 15s shutdownTimeout", elapsed)
 	}
 }
 
