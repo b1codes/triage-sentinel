@@ -114,11 +114,16 @@ func (s *Server) Handler() http.Handler { return s.mux }
 // routes registers every route. Method-qualified patterns give a 405 rather
 // than a 404 for a wrong method, which is a materially better error for a
 // client (Go 1.22+ ServeMux).
+//
+// Only liveness and the session-state probe are unauthenticated (SPEC §8);
+// everything else goes through requireSession.
 func (s *Server) routes() {
-	// Unauthenticated: liveness only (SPEC §8).
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
+	s.mux.HandleFunc("GET /api/session", s.handleSession)
+	s.mux.HandleFunc("POST /api/login", s.handleLogin)
+	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
 
-	s.mux.HandleFunc("GET /api/stream", s.handleStream)
+	s.mux.Handle("GET /api/stream", s.requireSession(http.HandlerFunc(s.handleStream)))
 }
 
 // writeJSON writes v as a JSON response. Encoding failures are logged rather

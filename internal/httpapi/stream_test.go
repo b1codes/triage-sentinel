@@ -65,6 +65,14 @@ func startStream(t *testing.T, srv *Server, query string, header http.Header) *b
 	if err != nil {
 		t.Fatalf("building request: %v", err)
 	}
+	// /api/stream is behind requireSession (Task 12); issue a session directly
+	// rather than round-tripping a login for every streaming test.
+	token, err := srv.sessions.issue()
+	if err != nil {
+		t.Fatalf("issuing session: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: token})
+
 	for k, vs := range header {
 		for _, v := range vs {
 			req.Header.Add(k, v)
@@ -166,6 +174,11 @@ func TestStreamRejectsInvalidLastEventID(t *testing.T) {
 		t.Fatalf("building request: %v", err)
 	}
 	req.Header.Set("Last-Event-ID", "not-a-number")
+	token, err := srv.sessions.issue()
+	if err != nil {
+		t.Fatalf("issuing session: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: token})
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -241,6 +254,11 @@ func TestStreamUnsubscribesOnDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building request: %v", err)
 	}
+	token, err := srv.sessions.issue()
+	if err != nil {
+		t.Fatalf("issuing session: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: token})
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("opening stream: %v", err)
