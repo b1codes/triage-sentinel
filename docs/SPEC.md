@@ -1138,7 +1138,9 @@ is the constraint the entire architecture was chosen to satisfy.
 │   ├── runner/  verify/  policy/  forge/  notify/
 │   ├── bus/  httpapi/  store/
 ├── internal/store/migrations/    NNNN_name.sql (embedded)
-├── web/                          React SPA (src/, dist/ embedded)
+├── internal/webassets/           //go:embed target for the built SPA
+│   └── dist/                     (Vite output; .gitkeep committed)
+├── web/                          React SPA source (src/, index.html, configs)
 ├── deploy/
 │   ├── relay/                    Cloud Run GitHub→Pub/Sub relay
 │   ├── gcp/                      topic, subscription, log sink scripts

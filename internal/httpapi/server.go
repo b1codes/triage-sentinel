@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/b1codes/triage-sentinel/internal/bus"
@@ -61,6 +63,7 @@ type Deps struct {
 type Server struct {
 	deps     Deps
 	mux      *http.ServeMux
+	static   http.Handler
 	sessions *sessionStore
 	log      *slog.Logger
 }
@@ -104,16 +107,48 @@ func NewServer(d Deps) (*Server, error) {
 		sessions: newSessionStore(d.Now),
 		log:      d.Logger,
 	}
+	if d.Static != nil {
+		s.static = d.Static
+	} else {
+		s.static = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.NotFound(w, r)
+		})
+	}
 	s.routes()
 	return s, nil
 }
 
-// Handler returns the server's root handler.
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler returns the server's root handler. Requests are split by path
+// before either handler ever sees them, rather than registering a static
+// catch-all pattern alongside the API patterns on one mux.
+//
+// Go's ServeMux only synthesizes a 405 for a method-mismatched request when
+// no registered pattern matches the path at all. A catch-all pattern always
+// matches by path, so on a single shared mux it would win outright for any
+// method it accepts — e.g. a GET to /api/login (POST-only) would silently
+// fall through to the catch-all as a 404 instead of the 405 a client expects.
+// Keeping API routing and static serving on separate handlers, selected here
+// by path prefix, sidesteps that precedence trap entirely.
+func (s *Server) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAPIPath(r.URL.Path) {
+			s.mux.ServeHTTP(w, r)
+			return
+		}
+		s.static.ServeHTTP(w, r)
+	})
+}
 
-// routes registers every route. Method-qualified patterns give a 405 rather
-// than a 404 for a wrong method, which is a materially better error for a
-// client (Go 1.22+ ServeMux).
+// isAPIPath reports whether p falls under the /api namespace, which the
+// static handler must never serve HTML for (SPEC §9).
+func isAPIPath(p string) bool {
+	clean := path.Clean("/" + strings.TrimPrefix(p, "/"))
+	return clean == "/api" || strings.HasPrefix(clean, "/api/")
+}
+
+// routes registers every API route. Method-qualified patterns give a 405
+// rather than a 404 for a wrong method, which is a materially better error
+// for a client (Go 1.22+ ServeMux).
 //
 // Only liveness and the session-state probe are unauthenticated (SPEC §8);
 // everything else goes through requireSession.

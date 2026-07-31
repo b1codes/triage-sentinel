@@ -14,7 +14,9 @@ build: web
 
 ## web: build the React SPA into internal/webassets/dist
 web:
-	cd web && npm ci && npm run build
+	cd web && npm ci
+	cd web && npm run build
+	touch internal/webassets/dist/.gitkeep
 
 ## test: run all Go tests with the race detector
 test:
@@ -53,3 +55,5 @@ migrate:
 
 clean:
 	rm -rf bin internal/webassets/dist
+	mkdir -p internal/webassets/dist
+	touch internal/webassets/dist/.gitkeep

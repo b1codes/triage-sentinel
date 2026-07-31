@@ -1,0 +1,65 @@
+:root {
+  color-scheme: light dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --fg: #1a1a1a;
+  --bg: #fbfbfa;
+  --muted: #6b6b6b;
+  --line: #e3e3e0;
+  --ok: #1a7f4b;
+  --bad: #b3261e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #ececeb;
+    --bg: #161615;
+    --muted: #9a9a97;
+    --line: #2e2e2c;
+    --ok: #4ac97e;
+    --bad: #f2837b;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+main {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem;
+}
+
+h1 { font-size: 1.05rem; letter-spacing: 0.02em; text-transform: uppercase; margin: 0 0 0.25rem; }
+p.sub { color: var(--muted); margin: 0 0 2rem; font-size: 0.85rem; }
+
+dl.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  margin: 0;
+}
+dl.metrics > div { background: var(--bg); padding: 0.85rem 1rem; }
+dl.metrics dt { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
+dl.metrics dd { margin: 0.35rem 0 0; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+
+.ok { color: var(--ok); }
+.bad { color: var(--bad); }
+
+form.login { display: flex; gap: 0.5rem; margin-top: 1rem; }
+input, button {
+  font: inherit;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+}
+button { cursor: pointer; }
+.error { color: var(--bad); font-size: 0.85rem; margin-top: 0.75rem; }
+footer { margin-top: 2rem; color: var(--muted); font-size: 0.75rem; }
