@@ -117,6 +117,8 @@ func (s *Server) Handler() http.Handler { return s.mux }
 func (s *Server) routes() {
 	// Unauthenticated: liveness only (SPEC §8).
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
+
+	s.mux.HandleFunc("GET /api/stream", s.handleStream)
 }
 
 // writeJSON writes v as a JSON response. Encoding failures are logged rather
