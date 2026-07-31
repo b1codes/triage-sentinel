@@ -134,3 +134,39 @@ func TestParseRegistryErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestStrictFieldCheckingInCommandsLost(t *testing.T) {
+	// This test reveals the problem: typo "buld" in commands should NOT be accepted
+	// because strict field checking should propagate through nested structs.
+	yaml := `version: 1
+defaults:
+  commands:
+    test: make test
+    buld: make build
+`
+	_, err := ParseRegistry([]byte(yaml))
+	if err == nil {
+		t.Fatal("expected error for typo 'buld' in commands, got nil - REGRESSION in strict field checking")
+	}
+	if !strings.Contains(err.Error(), "buld") {
+		t.Errorf("error should mention typo 'buld': %v", err)
+	}
+}
+
+func TestProjectSuppressionWindowError(t *testing.T) {
+	// Check if Project.SuppressionWindow error includes field name
+	yaml := `version: 1
+projects:
+  - slug: test
+    repo: github.com/test/test
+    default_branch: main
+    suppression_window: not a duration
+`
+	_, err := ParseRegistry([]byte(yaml))
+	if err == nil {
+		t.Fatal("expected error for invalid duration")
+	}
+	if !strings.Contains(err.Error(), "suppression_window") {
+		t.Errorf("error should mention field 'suppression_window': %v", err)
+	}
+}

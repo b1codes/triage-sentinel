@@ -120,6 +120,7 @@ type ProjectDefaults struct {
 }
 
 // UnmarshalYAML provides field-aware error messages for ProjectDefaults.
+// NOTE: This switch must stay in sync with ProjectDefaults struct fields.
 func (pd *ProjectDefaults) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind != yaml.MappingNode {
 		return fmt.Errorf("expected mapping for defaults")
@@ -185,7 +186,8 @@ func (pd *ProjectDefaults) UnmarshalYAML(value *yaml.Node) error {
 				return fmt.Errorf("protected_paths: %w", err)
 			}
 		case "commands":
-			if err := valNode.Decode(&pd.Commands); err != nil {
+			// For nested struct, enforce strict field checking by validating unknown fields
+			if err := pd.decodeCommandsStrict(valNode); err != nil {
 				return fmt.Errorf("commands: %w", err)
 			}
 		default:
@@ -194,6 +196,35 @@ func (pd *ProjectDefaults) UnmarshalYAML(value *yaml.Node) error {
 	}
 
 	return nil
+}
+
+// decodeCommandsStrict decodes Commands with strict field checking.
+// yaml.Node.Decode() creates a fresh decoder that doesn't inherit the parent's
+// KnownFields(true) setting, so we manually validate unknown fields first.
+func (pd *ProjectDefaults) decodeCommandsStrict(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("expected mapping")
+	}
+
+	// Known fields in Commands struct
+	knownFields := map[string]bool{
+		"test":        true,
+		"build":       true,
+		"healthcheck": true,
+		"deploy":      true,
+		"rollback":    true,
+	}
+
+	// Check for unknown fields
+	for i := 0; i < len(node.Content); i += 2 {
+		fieldName := node.Content[i].Value
+		if !knownFields[fieldName] {
+			return fmt.Errorf("unknown field %q", fieldName)
+		}
+	}
+
+	// Now decode with the normal decoder
+	return node.Decode(&pd.Commands)
 }
 
 // IssueTrigger selects which GitHub issue labels open an incident.
@@ -224,6 +255,79 @@ type Project struct {
 	SuppressionWindow *Duration `yaml:"suppression_window"`
 	MaxDiffLines      *int      `yaml:"max_diff_lines"`
 	AllowTestChanges  *bool     `yaml:"allow_test_changes"`
+}
+
+// UnmarshalYAML provides field-aware error messages for Project, especially for Duration fields.
+func (p *Project) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("expected mapping for project")
+	}
+
+	// Create a default instance
+	*p = Project{}
+
+	// Process each key-value pair
+	for i := 0; i < len(value.Content); i += 2 {
+		keyNode := value.Content[i]
+		valNode := value.Content[i+1]
+
+		key := keyNode.Value
+
+		switch key {
+		case "slug":
+			if err := valNode.Decode(&p.Slug); err != nil {
+				return fmt.Errorf("slug: %w", err)
+			}
+		case "repo":
+			if err := valNode.Decode(&p.Repo); err != nil {
+				return fmt.Errorf("repo: %w", err)
+			}
+		case "default_branch":
+			if err := valNode.Decode(&p.DefaultBranch); err != nil {
+				return fmt.Errorf("default_branch: %w", err)
+			}
+		case "autonomy":
+			if err := valNode.Decode(&p.Autonomy); err != nil {
+				return fmt.Errorf("autonomy: %w", err)
+			}
+		case "triggers":
+			if err := valNode.Decode(&p.Triggers); err != nil {
+				return fmt.Errorf("triggers: %w", err)
+			}
+		case "commands":
+			if err := valNode.Decode(&p.Commands); err != nil {
+				return fmt.Errorf("commands: %w", err)
+			}
+		case "env":
+			if err := valNode.Decode(&p.Env); err != nil {
+				return fmt.Errorf("env: %w", err)
+			}
+		case "tier2_model":
+			if err := valNode.Decode(&p.Tier2Model); err != nil {
+				return fmt.Errorf("tier2_model: %w", err)
+			}
+		case "daily_budget_usd":
+			if err := valNode.Decode(&p.DailyBudgetUSD); err != nil {
+				return fmt.Errorf("daily_budget_usd: %w", err)
+			}
+		case "suppression_window":
+			if err := valNode.Decode(&p.SuppressionWindow); err != nil {
+				return fmt.Errorf("suppression_window: %w", err)
+			}
+		case "max_diff_lines":
+			if err := valNode.Decode(&p.MaxDiffLines); err != nil {
+				return fmt.Errorf("max_diff_lines: %w", err)
+			}
+		case "allow_test_changes":
+			if err := valNode.Decode(&p.AllowTestChanges); err != nil {
+				return fmt.Errorf("allow_test_changes: %w", err)
+			}
+		default:
+			return fmt.Errorf("unknown field %q in project", key)
+		}
+	}
+
+	return nil
 }
 
 // Runtime holds host-level execution limits (SPEC §4.12).
