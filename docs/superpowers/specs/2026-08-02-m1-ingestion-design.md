@@ -216,17 +216,103 @@ SPEC §4.1 requires removing a project from the registry to preserve its inciden
 ### 4.4 Fingerprinting
 
 ```
-fingerprint = sha256(project_slug, error_class, normalize(top_n_frames))
+fingerprint = sha256(project_slug, error_class, normalize(selected_frames))
 ```
 
 `normalize` strips absolute paths, line numbers, memory addresses, UUIDs, and
 timestamps. `top_n_frames` defaults to 5.
 
-SPEC §4.3.2 says frames are restricted to "the project's own source tree". M1 has no
-checkout, so that is approximated by **excluding** known dependency directories
-(`vendor/`, `node_modules/`, `site-packages/`, `.venv/`, `dist-packages/`, Go module
-cache paths). The intent — that a shared dependency's stack does not collapse unrelated
-bugs together — is preserved. M3 can tighten this once a worktree exists.
+Fingerprinting is the mechanism the entire cost story rests on, and its two failure
+modes are **not** symmetric:
+
+| Failure | Consequence | Backstop |
+|---|---|---|
+| **Over-collapse** — distinct bugs share a fingerprint | The second bug is silently suppressed for the whole window. A real failure vanishes. | **None.** |
+| **Under-collapse** — one bug yields several fingerprints | Duplicate incidents; roughly proportional extra spend. | Per-incident, daily, weekly and monthly ceilings; the storm is visible in occurrence counts. |
+
+There is a backstop for the cheap failure and none for the expensive one. Every
+ambiguity below therefore resolves the same way:
+
+> **When frame classification is uncertain, fingerprint _more_ specifically, never less.**
+
+#### 4.4.1 Selecting frames: allowlist, then denylist, never empty
+
+SPEC §4.3.2 restricts frames to "the project's own source tree". M1 has no checkout to
+define that tree, so selection runs a three-step ladder and records which step produced
+the result:
+
+| Step | Strategy | Selection |
+|---|---|---|
+| 1 | `source_roots` | Project declares `fingerprint.source_roots` in the registry. A frame is own-source iff its normalised path is under one of them. **Closed set — preferred.** |
+| 2 | `denylist` | No roots declared. A frame is own-source iff its path matches no known dependency directory (`vendor/`, `node_modules/`, `site-packages/`, `dist-packages/`, `.venv/`, `.cargo/registry/`, `~/go/pkg/mod/`, `.gem/`, `.m2/`). **Open-ended — a best effort.** |
+| 3 | `all_frames` | Steps 1–2 selected **zero** frames. Fall back to the top N frames *including* dependency frames. |
+
+Step 3 is the point of the whole ladder. The earlier design excluded dependency frames
+unconditionally, so a stack whose every top frame lived in a dependency yielded an empty
+frame set and hashed to `sha256(slug, error_class, "")` — collapsing every same-class
+error in that project into one fingerprint. That is the unbacked failure mode, reached
+by the most common path. Degrading to all frames is *narrower*, not broader: it can
+only split fingerprints apart, never merge them.
+
+This mirrors how Sentry groups events — in-app frames when known, all frames when not.
+The difference is that Sentry's SDK supplies the in-app flag and we must infer it, which
+is exactly why the fallback direction matters more than the inference does.
+
+If no frames parse at all, strategy is `no_frames` and the hash covers
+`normalize(title + first non-empty body line)` — still per-message-shape, still narrow.
+
+#### 4.4.2 Fingerprint inputs differ by source
+
+A stack trace is the wrong model for a CI failure, and applying it anyway would
+over-collapse:
+
+| Kind | `error_class` | Frames |
+|---|---|---|
+| `log.error` | Exception type, or the first line's leading token | Stack frames per §4.4.1 |
+| `workflow_run.failed` | Workflow name | Failed **job** and **step** names |
+| `issues.opened` / `.labeled` | — | **No fingerprint** (`NULL`) |
+
+Human-filed issues are not storms, and `incidents.fingerprint` is already nullable;
+`(source, source_ref)` deduplication is sufficient for them. Fingerprinting an issue
+would only risk collapsing two unrelated bug reports.
+
+**Implementation-time verification required.** The `workflow_run` webhook payload
+describes the run, not its jobs. Whether it carries failed job and step identifiers must
+be confirmed against current GitHub documentation. If it does not, the adapter fetches
+`GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs` — an ordinary API call using the
+token M1 already requires, with no LLM cost — and fingerprints on the failed job and
+step names. Fingerprinting on workflow name alone is **not** an acceptable fallback: it
+would collapse every failure of `ci.yml` into a single incident, which is precisely the
+unbacked failure mode.
+
+#### 4.4.3 Recording the evidence
+
+Migration `0002` adds two columns to `fingerprints`:
+
+```sql
+ALTER TABLE fingerprints ADD COLUMN strategy    TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE fingerprints ADD COLUMN frames_json TEXT NOT NULL DEFAULT '[]';
+```
+
+`strategy` is one of `source_roots` / `denylist` / `all_frames` / `workflow` /
+`no_frames`. `frames_json` holds the normalised frames that produced the hash.
+
+This is what makes M1 worth its own milestone. M1 spends nothing, so it is a free
+observation period: after a week of real traffic the dashboard can show which strategy
+each project fell back to and which frames grouped what, and `source_roots` can be
+tuned from evidence before M2 starts spending against these groupings. Without the
+recorded frames it is impossible to tell *why* two things collapsed, only that they did.
+The storage cost is a few short strings per distinct fingerprint.
+
+**This contradicts an M0 rationale, deliberately.** M0's scope note argued that shipping
+the complete SPEC §5 schema as one atomic `0001` would let "M1's ingestion land without
+schema churn". That held for every table M1 writes; it did not anticipate needing to
+record *why* a fingerprint grouped what it did, because that need only became visible
+once §4.4's asymmetry was worked through. Forward-only numbered migrations exist for
+exactly this, the runner already globs and sorts `migrations/*.sql`, and adding `0002`
+costs nothing. Editing `0001` in place is not an option — it is already applied.
+
+#### 4.4.4 Suppression
 
 The first event for a fingerprint opens an incident and starts a suppression window
 (`fingerprints.suppress_until`, default 6h, per-project override). Subsequent events
@@ -254,13 +340,34 @@ triage:
     - "(?i)the operation was canceled"
 ```
 
-`projects.example.yaml` gains both blocks with these defaults.
+And, per project, the optional allowlist that step 1 of §4.4.1 prefers:
+
+```yaml
+projects:
+  - slug: example-api
+    fingerprint:
+      source_roots:                 # optional; omit to fall back to the denylist
+        - "cmd/"
+        - "internal/"
+```
+
+Validation: each root is non-empty, relative, and free of `..`. An absolute path or a
+traversal is a startup error — a root that can never match would silently demote every
+project to the weaker denylist strategy, and the whole point of §4.4.1 is that the
+strategy in use is known rather than assumed.
+
+`projects.example.yaml` gains all three blocks with these defaults.
 
 ### 5.1 Environment
 
 M0 established that each milestone asserts the secrets it needs at wiring time rather
 than in `LoadEnv`. M1 asserts, in `serve`: `GCP_PROJECT_ID`, `PUBSUB_SUBSCRIPTION`,
-`GITHUB_WEBHOOK_SECRET`, and resolvable Google application credentials.
+`GITHUB_WEBHOOK_SECRET`, `GITHUB_TOKEN`, and resolvable Google application credentials.
+
+`GITHUB_TOKEN` is required a milestone earlier than SPEC §14 implies, because §4.4.2's
+job-level fingerprinting reads the Actions API. It needs read scope only; M4 is the
+milestone that first requires write. The token is read from the environment at point of
+use and never persisted (SPEC §10).
 
 A `--no-ingest` flag skips the subscriber for local dashboard work. The opt-out is
 explicit and logged; silently starting without ingestion would reproduce exactly the
@@ -365,7 +472,10 @@ Per SPEC §11, and beside the code as `*_test.go`, table-driven, no assertion li
 | Target | Approach |
 |---|---|
 | Tier 0 filters | Table-driven over recorded real payloads in `testdata/`. Pure functions, exhaustive. |
-| Fingerprinting | Normalisation strips paths, line numbers, addresses, UUIDs, timestamps; distinct bugs must **not** collapse; dependency frames excluded. |
+| Fingerprinting | Normalisation strips paths, line numbers, addresses, UUIDs, timestamps. Distinct bugs must **not** collapse. Each ladder step in §4.4.1 is exercised and asserts the `strategy` it recorded. |
+| **Fingerprint degradation** | **The regression test for §4.4's asymmetry: a stack whose every top frame is a dependency frame must fall back to `all_frames` and still produce *distinct* hashes for two distinct bugs. A shared `sha256(slug, error_class, "")` is the specific bug this asserts against.** |
+| `workflow_run` grouping | Two different failing jobs in one workflow produce two fingerprints, not one. |
+| Issue events | Carry `fingerprint IS NULL` and are deduplicated by `source_ref` alone. |
 | Adapters | Golden-file normalisation per source, including malformed, truncated, and unknown-event payloads. |
 | HMAC | Valid, invalid, missing, and truncated signatures; constant-time comparison used. |
 | REST transport | `httptest` Pub/Sub emulator: successful pull, empty pull, 401 → refresh, 5xx → backoff, malformed JSON. |
@@ -397,5 +507,10 @@ last task corrected §13:
 2. **§4.3.1** — `BuildSanity` marked as landing in M3, with the no-op seam noted.
 3. **§4.3.1** — `Unroutable` and `Duplicate` documented as write-boundary enforcement
    rather than chain members (§3.2).
-4. **§4.3.2** — the dependency-directory exclusion approximation recorded (§4.4).
-5. **§6.2** — the `bot` and `triage` registry blocks added.
+4. **§4.3.2** — replaced by §4.4: the frame-selection ladder and its
+   never-broaden rule, per-source fingerprint inputs, and the recorded strategy.
+   The single sentence about frames "within the project's own source tree" is not
+   implementable without a checkout and must not be left as the specification.
+5. **§5** — the `fingerprints.strategy` and `fingerprints.frames_json` columns, and the
+   existence of migration `0002` (the schema is no longer one atomic migration).
+6. **§6.2** — the `bot`, `triage`, and per-project `fingerprint` registry blocks added.
