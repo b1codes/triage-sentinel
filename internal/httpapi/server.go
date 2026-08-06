@@ -16,6 +16,7 @@ import (
 
 	"github.com/b1codes/triage-sentinel/internal/bus"
 	"github.com/b1codes/triage-sentinel/internal/config"
+	"github.com/b1codes/triage-sentinel/internal/ingest"
 	"github.com/b1codes/triage-sentinel/internal/store"
 )
 
@@ -32,6 +33,9 @@ var ErrDeps = errors.New("invalid server dependencies")
 type ReplayFunc func(ctx context.Context, lastEventID int64, topics []string) ([]bus.Event, error)
 
 const defaultHeartbeatInterval = 15 * time.Second
+
+// topicIncidents is the SSE topic carrying incident state changes.
+const topicIncidents = "incidents"
 
 // Deps are the server's collaborators. DB, Hub, Env.DashboardPasswordHash and
 // Env.Location are required; the rest are optional.
@@ -56,6 +60,14 @@ type Deps struct {
 
 	// Started is process start time, used for uptime.
 	Started time.Time
+
+	// IngestStats reports subscriber counters for /api/health. Nil means
+	// ingestion is not running, which --no-ingest makes explicit.
+	IngestStats func() (ingest.Stats, error)
+
+	// IngestStaleAfter is how long without a successful pull before ingestion
+	// is reported stale. Zero disables the check.
+	IngestStaleAfter time.Duration
 
 	Logger *slog.Logger
 }
@@ -180,6 +192,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
 
 	s.mux.Handle("GET /api/stream", s.requireSession(http.HandlerFunc(s.handleStream)))
+
+	// M1 is read-only: every route is a GET. Mutating routes belong to later
+	// milestones, which is what lets CSRF stay deferred as M0 planned.
+	s.mux.Handle("GET /api/overview", s.requireSession(http.HandlerFunc(s.handleOverview)))
+	s.mux.Handle("GET /api/incidents", s.requireSession(http.HandlerFunc(s.handleIncidents)))
+	s.mux.Handle("GET /api/incidents/{id}", s.requireSession(http.HandlerFunc(s.handleIncident)))
+	s.mux.Handle("GET /api/projects", s.requireSession(http.HandlerFunc(s.handleProjects)))
 }
 
 // writeJSON writes v as a JSON response. Encoding failures are logged rather
