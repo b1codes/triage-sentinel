@@ -77,6 +77,30 @@ func TestListIncidentsOrdersNewestFirst(t *testing.T) {
 	}
 }
 
+func TestListIncidentsOldestFirstDrainsFIFO(t *testing.T) {
+	// The process loop uses this ordering. Newest-first would make the latest
+	// occurrence of a bug open the suppression window and suppress the
+	// earlier one, and would starve old rows under a batch limit.
+	db, ctx, now := ingestFixture(t)
+	seedMany(t, db, ctx, now)
+
+	got, _, err := ListIncidents(ctx, db, IncidentFilter{OldestFirst: true})
+	if err != nil {
+		t.Fatalf("ListIncidents() error = %v", err)
+	}
+	if len(got) < 2 {
+		t.Fatalf("len = %d, want at least 2", len(got))
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i-1].CreatedAt.After(got[i].CreatedAt) {
+			t.Fatalf("results are not oldest-first at index %d", i)
+		}
+	}
+	if got[0].SourceRef != "a" {
+		t.Errorf("first result SourceRef = %q, want the earliest seed %q", got[0].SourceRef, "a")
+	}
+}
+
 func TestGetIncidentRoundTrips(t *testing.T) {
 	db, ctx, now, id := seededIncident(t)
 

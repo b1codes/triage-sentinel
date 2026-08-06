@@ -47,6 +47,23 @@ type IncidentFilter struct {
 	Until    *time.Time
 	Limit    int
 	Offset   int
+
+	// OldestFirst reverses the default newest-first ordering.
+	//
+	// The dashboard wants newest-first; a work queue must not. The process
+	// loop drains state='received' FIFO for two reasons: the earliest
+	// occurrence of a bug should be the one that opens the suppression
+	// window and becomes canonical, and under sustained load a newest-first
+	// batch would starve the oldest rows indefinitely.
+	OldestFirst bool
+}
+
+// orderBy renders the ORDER BY clause for the filter's direction.
+func (f IncidentFilter) orderBy() string {
+	if f.OldestFirst {
+		return ` ORDER BY created_at ASC, id ASC`
+	}
+	return ` ORDER BY created_at DESC, id DESC`
 }
 
 // where builds the shared predicate and its arguments. Every value is bound as
@@ -154,7 +171,7 @@ func ListIncidents(ctx context.Context, db *DB, f IncidentFilter) ([]Incident, i
 	pageArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := db.Reader().QueryContext(ctx,
 		`SELECT `+incidentColumns+` FROM incidents`+predicate+
-			` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, pageArgs...)
+			f.orderBy()+` LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("listing incidents: %w", err)
 	}

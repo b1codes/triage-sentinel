@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/b1codes/triage-sentinel/internal/store"
@@ -40,6 +41,20 @@ func NewIncidentWriter(db *store.DB, clock func() time.Time) *IncidentWriter {
 func (w *IncidentWriter) Handle(ctx context.Context, ev Event) error {
 	now := w.clock()
 
+	metadata := ev.Metadata
+	if len(ev.JobSteps) > 0 {
+		metadata = make(map[string]string, len(ev.Metadata)+1)
+		for k, v := range ev.Metadata {
+			metadata[k] = v
+		}
+		// Unit separator: it cannot occur in a job or step name, so the join
+		// is unambiguous. Without this the process loop cannot fingerprint a
+		// CI failure by failing job and step, and would fall back to grouping
+		// on the workflow name — which collapses every ci.yml failure into a
+		// single incident (design §4.4.2).
+		metadata["job_steps"] = strings.Join(ev.JobSteps, "\x1f")
+	}
+
 	params := store.IngestParams{
 		ProjectSlug: ev.ProjectSlug,
 		Source:      ev.Source,
@@ -47,7 +62,7 @@ func (w *IncidentWriter) Handle(ctx context.Context, ev Event) error {
 		Kind:        ev.Kind,
 		Title:       ev.Title,
 		Body:        ev.Body,
-		Metadata:    ev.Metadata,
+		Metadata:    metadata,
 		OccurredAt:  ev.OccurredAt,
 		State:       "received",
 	}

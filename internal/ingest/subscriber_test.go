@@ -5,9 +5,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/b1codes/triage-sentinel/internal/store"
 )
 
 // fakePuller serves scripted batches then blocks until the context ends.
@@ -225,6 +228,61 @@ func TestSubscriberStopsOnContextCancellation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Run did not return within one second of cancellation")
+	}
+}
+
+func TestIncidentWriterPersistsJobSteps(t *testing.T) {
+	// A CI failure must carry its failing job and step through persistence, or
+	// fingerprinting degrades to the workflow name and collapses every failure
+	// of one workflow into a single incident.
+	ctx := context.Background()
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := store.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	if err := store.SyncProjects(ctx, db, []store.ProjectRow{
+		{Slug: "api", Repo: "github.com/example/api", DefaultBranch: "main"},
+	}, now); err != nil {
+		t.Fatalf("SyncProjects() error = %v", err)
+	}
+
+	callerMetadata := map[string]string{"repository": "example/example-api"}
+	ev := Event{
+		Source: "github", SourceRef: "workflow_run:1", Kind: "workflow_run.failed",
+		ProjectSlug: "api", Title: "CI failed", Workflow: "CI",
+		JobSteps:   []string{"test", "Run unit tests"},
+		Metadata:   callerMetadata,
+		OccurredAt: now,
+	}
+
+	w := NewIncidentWriter(db, func() time.Time { return now })
+	if err := w.Handle(ctx, ev); err != nil {
+		t.Fatalf("Handle() error = %v, want nil", err)
+	}
+
+	incidents, _, err := store.ListIncidents(ctx, db, store.IncidentFilter{})
+	if err != nil {
+		t.Fatalf("ListIncidents() error = %v", err)
+	}
+	if len(incidents) != 1 {
+		t.Fatalf("len(incidents) = %d, want 1", len(incidents))
+	}
+
+	got := incidents[0].Metadata["job_steps"]
+	if want := "test\x1fRun unit tests"; got != want {
+		t.Errorf("persisted job_steps = %q, want the unit-separated join %q", got, want)
+	}
+	if incidents[0].Metadata["repository"] != "example/example-api" {
+		t.Error("the event's own metadata was lost when job_steps was added")
+	}
+	if len(callerMetadata) != 1 {
+		t.Errorf("the caller's metadata map was mutated (now %v); it must be copied", callerMetadata)
 	}
 }
 
