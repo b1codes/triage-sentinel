@@ -1,0 +1,15 @@
+{
+  "insertId": "1a2b3c4d5e",
+  "timestamp": "2026-08-02T11:04:05.123456Z",
+  "severity": "ERROR",
+  "logName": "projects/example/logs/run.googleapis.com%2Fstderr",
+  "resource": {
+    "type": "cloud_run_revision",
+    "labels": {
+      "service_name": "example-api",
+      "revision_name": "example-api-00042-abc",
+      "location": "us-central1"
+    }
+  },
+  "textPayload": "TypeError: Cannot read properties of undefined\n    at handler (/app/src/index.js:12:9)\n    at Layer.handle (/app/node_modules/express/lib/router/layer.js:95:5)"
+}

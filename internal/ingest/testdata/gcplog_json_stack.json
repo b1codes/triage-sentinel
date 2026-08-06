@@ -1,0 +1,13 @@
+{
+  "insertId": "9z8y7x6w5v",
+  "timestamp": "2026-08-02T12:00:00Z",
+  "severity": "CRITICAL",
+  "resource": {
+    "type": "cloud_run_revision",
+    "labels": { "service_name": "example-worker" }
+  },
+  "jsonPayload": {
+    "message": "ValueError: invalid literal for int() with base 10: 'x'",
+    "stack_trace": "Traceback (most recent call last):\n  File \"/app/src/worker.py\", line 41, in run\n    total = int(value)\nValueError: invalid literal for int() with base 10: 'x'"
+  }
+}
