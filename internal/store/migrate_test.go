@@ -21,16 +21,18 @@ func TestMigrateFreshDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v, want nil", err)
 	}
-	if applied != 1 {
-		t.Errorf("Migrate() applied = %d, want 1", applied)
+	// Bump this with every migration added: a fresh database applies all of
+	// them and lands on the latest version.
+	if applied != 2 {
+		t.Errorf("Migrate() applied = %d, want 2", applied)
 	}
 
 	got, err := SchemaVersion(ctx, db)
 	if err != nil {
 		t.Fatalf("SchemaVersion() error = %v", err)
 	}
-	if got != 1 {
-		t.Errorf("SchemaVersion() = %d, want 1", got)
+	if got != 2 {
+		t.Errorf("SchemaVersion() = %d, want 2", got)
 	}
 }
 
@@ -225,4 +227,56 @@ func TestMigrateOnClosedDatabase(t *testing.T) {
 	if _, err := Migrate(context.Background(), db); err == nil {
 		t.Error("Migrate() on a closed database returned nil error")
 	}
+}
+
+func TestMigrate0002AddsFingerprintEvidence(t *testing.T) {
+	db := openTemp(t)
+
+	if _, err := Migrate(context.Background(), db); err != nil {
+		t.Fatalf("Migrate() error = %v, want nil", err)
+	}
+
+	version, err := SchemaVersion(context.Background(), db)
+	if err != nil {
+		t.Fatalf("SchemaVersion() error = %v, want nil", err)
+	}
+	if version < 2 {
+		t.Fatalf("SchemaVersion() = %d, want at least 2", version)
+	}
+
+	t.Run("columns exist with safe defaults", func(t *testing.T) {
+		_, err := db.Writer().Exec(`
+			INSERT INTO projects (slug, repo, default_branch, created_at, updated_at)
+			VALUES ('p', 'github.com/o/p', 'main', '2026-08-02T00:00:00Z', '2026-08-02T00:00:00Z')`)
+		if err != nil {
+			t.Fatalf("seeding project: %v", err)
+		}
+		_, err = db.Writer().Exec(`
+			INSERT INTO incidents (project_slug, source, source_ref, kind, title, state, occurred_at, created_at, updated_at)
+			VALUES ('p', 'gcplog', 'gcplog:1', 'log.error', 't', 'received', '2026-08-02T00:00:00Z', '2026-08-02T00:00:00Z', '2026-08-02T00:00:00Z')`)
+		if err != nil {
+			t.Fatalf("seeding incident: %v", err)
+		}
+		// Deliberately omit strategy and frames_json to prove the defaults apply.
+		_, err = db.Writer().Exec(`
+			INSERT INTO fingerprints (fingerprint, project_slug, first_incident_id, last_seen_at, suppress_until)
+			VALUES ('abc', 'p', 1, '2026-08-02T00:00:00Z', '2026-08-02T06:00:00Z')`)
+		if err != nil {
+			t.Fatalf("inserting fingerprint: %v", err)
+		}
+
+		var strategy, frames string
+		err = db.Reader().QueryRow(
+			`SELECT strategy, frames_json FROM fingerprints WHERE fingerprint = 'abc'`,
+		).Scan(&strategy, &frames)
+		if err != nil {
+			t.Fatalf("selecting evidence columns: %v", err)
+		}
+		if strategy != "unknown" {
+			t.Errorf("strategy default = %q, want %q", strategy, "unknown")
+		}
+		if frames != "[]" {
+			t.Errorf("frames_json default = %q, want %q", frames, "[]")
+		}
+	})
 }
