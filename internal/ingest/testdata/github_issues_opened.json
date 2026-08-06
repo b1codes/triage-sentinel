@@ -1,0 +1,17 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 17,
+    "title": "Pager skips the last row",
+    "body": "Steps to reproduce:\n1. open page 2\n2. the final row is missing",
+    "html_url": "https://github.com/example/example-api/issues/17",
+    "created_at": "2026-08-02T09:00:00Z",
+    "labels": [{ "name": "bug" }],
+    "user": { "login": "someone" }
+  },
+  "repository": {
+    "full_name": "example/example-api",
+    "name": "example-api",
+    "owner": { "login": "example" }
+  }
+}
