@@ -58,6 +58,24 @@ runtime:
   tier2_min_confidence: 0.5
   max_input_tokens: 40000
 
+# The sentinel's own git identity. bot.email is required: the Tier 0
+# SelfInflicted filter matches on it so the system cannot enter a
+# self-referential repair loop (SPEC §4.3.1, §4.9).
+bot:
+  name: triage-sentinel
+  email: sentinel@example.invalid
+
+# Tier 0 tuning that is not per-project. Every pattern is compiled at load,
+# so a malformed regex refuses startup rather than failing on the first
+# real event.
+triage:
+  transient_patterns:
+    - "(?i)connection reset by peer"
+    - "(?i)ECONNRESET"
+    - "(?i)rate limit"
+    - "(?i)the runner has received a shutdown signal"
+    - "(?i)the operation was canceled"
+
 projects:
   - slug: example-api
     repo: github.com/example/example-api
@@ -78,6 +96,13 @@ projects:
       rollback: make rollback
     env:
       DATABASE_URL: postgres://localhost/example_test
+    # Optional. Declaring source roots selects the strongest fingerprint
+    # grouping strategy. Omit the block to fall back to a dependency-directory
+    # denylist. See docs/SPEC.md §4.3.2.
+    fingerprint:
+      source_roots:
+        - "cmd/"
+        - "internal/"
 
   - slug: example-worker
     repo: github.com/example/example-worker

@@ -286,6 +286,32 @@ func (t *Triggers) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// Bot is the sentinel's own git identity. The Tier 0 SelfInflicted filter
+// matches Email so the system cannot enter a self-referential repair loop
+// (SPEC §4.3.1, §4.9).
+type Bot struct {
+	Name  string `yaml:"name"`
+	Email string `yaml:"email"`
+}
+
+// Triage holds Tier 0 tuning that is not per-project.
+type Triage struct {
+	// TransientPatterns are compiled at load, so a malformed regex refuses
+	// startup rather than failing on the first real event.
+	TransientPatterns []string `yaml:"transient_patterns"`
+}
+
+// FingerprintConfig declares which paths belong to a project's own source
+// tree. When present it selects the strongest frame-selection strategy
+// (design §4.4.1 step 1); when absent the fingerprinter falls back to the
+// dependency denylist.
+type FingerprintConfig struct {
+	SourceRoots []string `yaml:"source_roots"`
+}
+
+// fingerprintKnownFields backs strict decoding of the per-project block.
+var fingerprintKnownFields = map[string]bool{"source_roots": true}
+
 // Project is one managed application. Empty scalar fields and nil pointers
 // inherit from ProjectDefaults; see EffectiveProject.
 type Project struct {
@@ -296,6 +322,10 @@ type Project struct {
 	Triggers      Triggers          `yaml:"triggers"`
 	Commands      Commands          `yaml:"commands"`
 	Env           map[string]string `yaml:"env"`
+
+	// Fingerprint is nil when the project declares no source roots, which is
+	// meaningful rather than merely empty: it selects the denylist strategy.
+	Fingerprint *FingerprintConfig `yaml:"fingerprint"`
 
 	Tier2Model        string    `yaml:"tier2_model"`
 	DailyBudgetUSD    *float64  `yaml:"daily_budget_usd"`
@@ -370,6 +400,12 @@ func (p *Project) UnmarshalYAML(value *yaml.Node) error {
 			if err := valNode.Decode(&p.AllowTestChanges); err != nil {
 				return fmt.Errorf("allow_test_changes: %w", err)
 			}
+		case "fingerprint":
+			var fp FingerprintConfig
+			if err := decodeStructStrict(valNode, fingerprintKnownFields, &fp); err != nil {
+				return fmt.Errorf("fingerprint: %w", err)
+			}
+			p.Fingerprint = &fp
 		default:
 			return fmt.Errorf("unknown field %q in project", key)
 		}
@@ -394,6 +430,8 @@ type Registry struct {
 	SoftMode SoftMode        `yaml:"soft_mode"`
 	Defaults ProjectDefaults `yaml:"defaults"`
 	Runtime  Runtime         `yaml:"runtime"`
+	Bot      Bot             `yaml:"bot"`
+	Triage   Triage          `yaml:"triage"`
 	Projects []Project       `yaml:"projects"`
 }
 

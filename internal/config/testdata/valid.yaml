@@ -55,6 +55,18 @@ runtime:
   tier2_min_confidence: 0.5
   max_input_tokens: 40000
 
+bot:
+  name: triage-sentinel
+  email: sentinel@example.invalid
+
+triage:
+  transient_patterns:
+    - "(?i)connection reset by peer"
+    - "(?i)ECONNRESET"
+    - "(?i)rate limit"
+    - "(?i)the runner has received a shutdown signal"
+    - "(?i)the operation was canceled"
+
 projects:
   - slug: example-api
     repo: github.com/example/example-api
@@ -75,6 +87,10 @@ projects:
       rollback: make rollback
     env:
       DATABASE_URL: postgres://localhost/example_test
+    fingerprint:
+      source_roots:
+        - "cmd/"
+        - "internal/"
 
   - slug: example-worker
     repo: github.com/example/example-worker
