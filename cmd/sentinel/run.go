@@ -22,6 +22,7 @@ import (
 	"github.com/b1codes/triage-sentinel/internal/bus"
 	"github.com/b1codes/triage-sentinel/internal/config"
 	"github.com/b1codes/triage-sentinel/internal/httpapi"
+	"github.com/b1codes/triage-sentinel/internal/ingest"
 	"github.com/b1codes/triage-sentinel/internal/store"
 	"github.com/b1codes/triage-sentinel/internal/version"
 	"github.com/b1codes/triage-sentinel/internal/webassets"
@@ -48,6 +49,7 @@ Usage:
 Subcommands:
   serve          Run the control plane (default)
   migrate        Apply pending database migrations and exit
+  replay         Feed a recorded payload file through the ingest pipeline
   validate       Validate configuration and exit
   hash-password  Read a password from stdin and print a bcrypt hash
   version        Print the build version
@@ -56,10 +58,11 @@ Flags:
 `
 
 type options struct {
-	envFile string
-	config  string
-	listen  string
-	dev     bool
+	envFile  string
+	config   string
+	listen   string
+	dev      bool
+	noIngest bool
 }
 
 // run is main's testable body.
@@ -86,6 +89,7 @@ func runWithStdin(ctx context.Context, args []string, stdin io.Reader, stdout, s
 	fs.StringVar(&opts.config, "config", "projects.yaml", "path to the project registry")
 	fs.StringVar(&opts.listen, "listen", "", "override SENTINEL_LISTEN_ADDR")
 	fs.BoolVar(&opts.dev, "dev", false, "proxy the dashboard to the Vite dev server instead of serving embedded assets")
+	fs.BoolVar(&opts.noIngest, "no-ingest", false, "start without the Pub/Sub subscriber (local dashboard work only)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -104,6 +108,8 @@ func runWithStdin(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		return validate(opts, stdout)
 	case "migrate":
 		return migrate(ctx, opts, stdout)
+	case "replay":
+		return replayFile(ctx, opts, fs.Arg(0), stdout)
 	case "serve":
 		return serve(ctx, opts, stdout, stderr)
 	default:
@@ -272,8 +278,38 @@ func serve(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 		log.Info("applied migrations", "count", applied)
 	}
 
+	// Nothing can write an incident until this runs: foreign_keys is verified
+	// on at open and incidents.project_slug references projects(slug).
+	//
+	// context.Background() rather than ctx, for the same reason the migrations
+	// above use it: this is one short startup transaction, and a shutdown
+	// signal arriving mid-flight must not abort it and leave the projects
+	// table half-reconciled. Cancelling here would also turn an ordinary
+	// shutdown into a startup error.
+	if err := store.SyncProjects(context.Background(), db, projectRows(registry), time.Now()); err != nil {
+		return err
+	}
+
 	hub := bus.NewHub(sseBufferSize)
 	defer hub.Close()
+
+	var ingestStats func() (ingest.Stats, error)
+
+	if opts.noIngest {
+		log.Warn("starting without ingestion; no events will be received (--no-ingest)")
+	} else {
+		if err := assertIngestEnv(env); err != nil {
+			return err
+		}
+		subscriber, err := startIngestion(ctx, ingestDeps{
+			Env: env, Registry: registry, DB: db, Hub: hub, Logger: log,
+		})
+		if err != nil {
+			return err
+		}
+		ingestStats = func() (ingest.Stats, error) { return subscriber.Stats(), nil }
+		log.Info("ingestion started", "subscription", env.PubSubSubscription)
+	}
 
 	static, err := dashboardHandler(opts, log)
 	if err != nil {
@@ -281,13 +317,16 @@ func serve(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 	}
 
 	srv, err := httpapi.NewServer(httpapi.Deps{
-		DB:       db,
-		Hub:      hub,
-		Env:      env,
-		Registry: registry,
-		Static:   static,
-		Logger:   log,
-		Started:  started,
+		DB:               db,
+		Hub:              hub,
+		Env:              env,
+		Registry:         registry,
+		Static:           static,
+		Logger:           log,
+		Started:          started,
+		Replay:           httpapi.NewStoreReplay(db),
+		IngestStats:      ingestStats,
+		IngestStaleAfter: ingestStaleAfter,
 	})
 	if err != nil {
 		return err
@@ -309,7 +348,7 @@ func serve(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 		ErrorLog:     slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 
-	reloadDone := watchReloads(ctx, srv, opts, log)
+	reloadDone := watchReloads(ctx, srv, db, opts, log)
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -382,7 +421,7 @@ func dashboardHandler(opts options, log *slog.Logger) (http.Handler, error) {
 // watchReloads applies SIGHUP by re-reading the registry. A reload that fails
 // validation is logged and discarded, leaving the running configuration in
 // place (SPEC §4.1).
-func watchReloads(ctx context.Context, srv *httpapi.Server, opts options, log *slog.Logger) <-chan struct{} {
+func watchReloads(ctx context.Context, srv *httpapi.Server, db *store.DB, opts options, log *slog.Logger) <-chan struct{} {
 	done := make(chan struct{})
 
 	hup := make(chan os.Signal, 1)
@@ -402,6 +441,13 @@ func watchReloads(ctx context.Context, srv *httpapi.Server, opts options, log *s
 					log.Error("reload rejected; keeping the previous configuration",
 						"error", err, "config", opts.config)
 					continue
+				}
+				// Re-sync so a newly registered project can receive incidents
+				// without a restart. A sync failure is logged rather than
+				// rejecting the reload: the registry itself is valid, and the
+				// previous rows remain in place.
+				if err := store.SyncProjects(ctx, db, projectRows(registry), time.Now()); err != nil {
+					log.Error("reload applied but project sync failed", "error", err)
 				}
 				srv.SetRegistry(registry)
 				log.Info("configuration reloaded", "projects", len(registry.Projects))
