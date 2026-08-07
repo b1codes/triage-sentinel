@@ -63,3 +63,153 @@ input, button {
 button { cursor: pointer; }
 .error { color: var(--bad); font-size: 0.85rem; margin-top: 0.75rem; }
 footer { margin-top: 2rem; color: var(--muted); font-size: 0.75rem; }
+
+/* ---- M1: application shell ---------------------------------------------- */
+
+main.centered { max-width: 22rem; }
+
+.shell > header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.7rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.shell nav { display: flex; gap: 0.9rem; margin-right: auto; font-size: 0.85rem; }
+.shell nav a { color: var(--muted); text-decoration: none; }
+.shell nav a:hover { color: var(--fg); }
+.shell nav a.active { color: var(--fg); border-bottom: 2px solid var(--fg); }
+
+/* A dead stream must be obvious at a glance (SPEC §9): closed is the only
+   state that borrows the error colour and a filled background. */
+.stream {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--line);
+}
+.stream-live { color: var(--ok); }
+.stream-connecting { color: var(--muted); }
+.stream-closed { color: var(--bg); background: var(--bad); border-color: var(--bad); }
+
+/* ---- Overview ----------------------------------------------------------- */
+
+dl.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  margin: 0 0 1.5rem;
+}
+.tile { background: var(--bg); padding: 0.7rem 0.9rem; }
+.tile dt {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.tile dd { margin: 0.3rem 0 0; font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+
+.banner {
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--bad);
+  margin: 0 0 1.5rem;
+  font-size: 0.85rem;
+}
+.note {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: -0.75rem 0 1.75rem;
+}
+
+h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+
+ul.feed { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+ul.feed li { border-bottom: 1px solid var(--line); }
+.row {
+  display: grid;
+  grid-template-columns: 6rem 1fr auto;
+  grid-template-areas: 'state title when' 'state meta when';
+  gap: 0 0.9rem;
+  padding: 0.7rem 0.4rem;
+  text-decoration: none;
+  color: inherit;
+}
+.row:hover { background: color-mix(in srgb, var(--fg) 4%, transparent); }
+.row:focus-visible { outline: 2px solid var(--fg); outline-offset: -2px; }
+.row .state { grid-area: state; }
+.row .title { grid-area: title; }
+.row .meta { grid-area: meta; color: var(--muted); font-size: 0.78rem; }
+.row .when { grid-area: when; color: var(--muted); font-size: 0.78rem; align-self: center; }
+
+.state {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.state-triaging .state, .state.state-triaging { color: var(--fg); }
+.state-received .state, .state.state-received { color: var(--fg); }
+.state-suppressed .state, .state.state-suppressed { color: var(--muted); }
+.state-filtered .state, .state.state-filtered { color: var(--muted); }
+.state-escalated .state, .state.state-escalated { color: var(--bad); }
+.state-failed .state, .state.state-failed { color: var(--bad); }
+
+/* ---- Incident detail ---------------------------------------------------- */
+
+.back { font-size: 0.8rem; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--fg); }
+
+.panel { border: 1px solid var(--line); padding: 0.9rem 1rem; margin: 0 0 1rem; }
+.panel h3 {
+  margin: 0 0 0.6rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.panel pre {
+  margin: 0;
+  overflow-x: auto;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+ol.frames, ol.timeline { margin: 0; padding-left: 1.1rem; font-size: 0.82rem; }
+ol.frames li, ol.timeline li { margin: 0.25rem 0; }
+ol.timeline li { display: flex; gap: 0.8rem; }
+ol.timeline .when { color: var(--muted); min-width: 5rem; }
+ol.timeline .what { flex: 1; }
+ol.timeline .who { color: var(--muted); }
+
+dl.kv { margin: 0; font-size: 0.82rem; }
+dl.kv > div { display: flex; gap: 0.8rem; padding: 0.2rem 0; }
+dl.kv dt { color: var(--muted); min-width: 9rem; }
+dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+
+/* ---- Projects ----------------------------------------------------------- */
+
+table.grid { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+table.grid th, table.grid td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+table.grid th {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 400;
+}
+tr.inactive { color: var(--muted); }
+
+.empty { padding: 3rem 0; text-align: center; }
