@@ -14,6 +14,19 @@ import (
 	"github.com/b1codes/triage-sentinel/internal/triage"
 )
 
+// registryForE2E is the registry every test in this package runs against, so
+// fixture and the end-to-end tests cannot disagree about which project is
+// registered. The slug matches the service_name label the gcplog fixtures use.
+func registryForE2E(t *testing.T) config.Registry {
+	t.Helper()
+	return config.Registry{
+		Defaults: config.ProjectDefaults{SuppressionWindow: config.Duration{Duration: 6 * time.Hour}},
+		Projects: []config.Project{
+			{Slug: "api", Repo: "github.com/example/api", DefaultBranch: "main"},
+		},
+	}
+}
+
 func fixture(t *testing.T) (*Orchestrator, *store.DB, *bus.Hub, context.Context, time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -29,12 +42,7 @@ func fixture(t *testing.T) (*Orchestrator, *store.DB, *bus.Hub, context.Context,
 		t.Fatalf("Migrate() error = %v", err)
 	}
 
-	registry := config.Registry{
-		Defaults: config.ProjectDefaults{SuppressionWindow: config.Duration{Duration: 6 * time.Hour}},
-		Projects: []config.Project{
-			{Slug: "api", Repo: "github.com/example/api", DefaultBranch: "main"},
-		},
-	}
+	registry := registryForE2E(t)
 	if err := store.SyncProjects(ctx, db, []store.ProjectRow{
 		{Slug: "api", Repo: "github.com/example/api", DefaultBranch: "main"},
 	}, now); err != nil {
