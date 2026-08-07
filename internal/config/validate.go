@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"os"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -53,6 +55,8 @@ func (r Registry) Validate() error {
 	problems = append(problems, r.validateSoftMode()...)
 	problems = append(problems, r.validateDefaults()...)
 	problems = append(problems, r.validateRuntime()...)
+	problems = append(problems, r.validateBot()...)
+	problems = append(problems, r.validateTriage()...)
 	problems = append(problems, r.validateProjects()...)
 
 	if len(problems) > 0 {
@@ -245,6 +249,79 @@ func (r Registry) validateRuntime() []error {
 	return problems
 }
 
+// CompileTransientPatterns compiles the Tier 0 transient regex set. It is
+// called both by Validate — so a malformed pattern refuses startup rather
+// than failing on the first real event — and by the triage package at
+// construction, so the two can never disagree about what compiles.
+func CompileTransientPatterns(patterns []string) ([]*regexp.Regexp, error) {
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, p := range patterns {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			return nil, fmt.Errorf("compiling transient pattern %q: %w", p, err)
+		}
+		compiled = append(compiled, re)
+	}
+	return compiled, nil
+}
+
+// validateBot checks the sentinel's own git identity. The address is
+// load-bearing: the Tier 0 SelfInflicted filter matches on it, so an empty
+// or malformed value would silently disable the loop-prevention guard.
+func (r Registry) validateBot() []error {
+	var problems []error
+
+	if strings.TrimSpace(r.Bot.Email) == "" {
+		problems = append(problems, errors.New(
+			"bot.email is required; the SelfInflicted filter matches it to prevent self-repair loops"))
+		return problems
+	}
+	if _, err := mail.ParseAddress(r.Bot.Email); err != nil {
+		problems = append(problems, fmt.Errorf("bot.email %q is not a valid address: %w", r.Bot.Email, err))
+	}
+	return problems
+}
+
+// validateTriage compiles every transient pattern, discarding the result.
+func (r Registry) validateTriage() []error {
+	if _, err := CompileTransientPatterns(r.Triage.TransientPatterns); err != nil {
+		return []error{fmt.Errorf("triage.transient_patterns: %w", err)}
+	}
+	return nil
+}
+
+// validateSourceRoots enforces that a declared root can actually match a
+// relative frame path. A root that can never match would silently demote the
+// project to the weaker denylist strategy, and the point of the ladder is
+// that the strategy in use is known rather than assumed.
+func validateSourceRoots(slug string, fp *FingerprintConfig) []error {
+	if fp == nil {
+		return nil // absent is valid: it selects the denylist strategy
+	}
+
+	var problems []error
+	if len(fp.SourceRoots) == 0 {
+		problems = append(problems, fmt.Errorf(
+			"project %q declares a fingerprint block with no source_roots; omit the block entirely to use the denylist", slug))
+		return problems
+	}
+
+	for _, root := range fp.SourceRoots {
+		trimmed := strings.TrimSpace(root)
+		switch {
+		case trimmed == "":
+			problems = append(problems, fmt.Errorf("project %q: source_roots contains an empty entry", slug))
+		case path.IsAbs(trimmed) || strings.HasPrefix(trimmed, "/"):
+			problems = append(problems, fmt.Errorf(
+				"project %q: source_roots entry %q must be relative to the repository root", slug, root))
+		case trimmed == ".." || strings.HasPrefix(trimmed, "../") || strings.Contains(trimmed, "/../"):
+			problems = append(problems, fmt.Errorf(
+				"project %q: source_roots entry %q must not traverse outside the repository", slug, root))
+		}
+	}
+	return problems
+}
+
 func (r Registry) validateProjects() []error {
 	var problems []error
 
@@ -311,6 +388,8 @@ func (r Registry) validateProjects() []error {
 			problems = append(problems, fmt.Errorf(
 				"%s has no triggers enabled; it would never receive an incident", where))
 		}
+
+		problems = append(problems, validateSourceRoots(p.Slug, p.Fingerprint)...)
 	}
 	return problems
 }

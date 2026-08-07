@@ -123,8 +123,10 @@ func TestHealthReturnsOK(t *testing.T) {
 	if got.Version == "" {
 		t.Error("Version is empty")
 	}
-	if got.SchemaVersion != 1 {
-		t.Errorf("SchemaVersion = %d, want 1", got.SchemaVersion)
+	// Bump with every migration added; health reports the applied schema
+	// version, so this tracks the latest migration rather than a fixed 1.
+	if got.SchemaVersion != 2 {
+		t.Errorf("SchemaVersion = %d, want 2", got.SchemaVersion)
 	}
 	if got.UptimeSeconds < 90 {
 		t.Errorf("UptimeSeconds = %d, want >= 90", got.UptimeSeconds)

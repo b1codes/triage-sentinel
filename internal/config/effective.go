@@ -32,9 +32,14 @@ type EffectiveProject struct {
 	DailyBudgetUSD *float64
 
 	ProtectedPaths []string
-	Commands       Commands
-	Triggers       Triggers
-	Env            map[string]string
+
+	// SourceRoots is empty when the project declares none, which selects the
+	// denylist frame-selection strategy rather than meaning "no frames".
+	SourceRoots []string
+
+	Commands Commands
+	Triggers Triggers
+	Env      map[string]string
 }
 
 // EffectiveProject resolves defaults and overrides for one slug. It reports
@@ -76,6 +81,9 @@ func (r Registry) EffectiveProject(slug string) (EffectiveProject, bool) {
 		}
 		if p.AllowTestChanges != nil {
 			eff.AllowTestChanges = *p.AllowTestChanges
+		}
+		if p.Fingerprint != nil {
+			eff.SourceRoots = append([]string(nil), p.Fingerprint.SourceRoots...)
 		}
 		return eff, true
 	}

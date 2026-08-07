@@ -1,0 +1,25 @@
+{
+  "action": "completed",
+  "workflow_run": {
+    "id": 1234567890,
+    "name": "CI",
+    "path": ".github/workflows/ci.yml",
+    "head_branch": "main",
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "completed",
+    "conclusion": "failure",
+    "html_url": "https://github.com/example/example-api/actions/runs/1234567890",
+    "run_number": 42,
+    "updated_at": "2026-08-02T11:04:05Z",
+    "head_commit": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "message": "fix: correct the off-by-one in the pager",
+      "author": { "name": "A Person", "email": "person@example.com" }
+    }
+  },
+  "repository": {
+    "full_name": "example/example-api",
+    "name": "example-api",
+    "owner": { "login": "example" }
+  }
+}

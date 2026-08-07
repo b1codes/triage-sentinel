@@ -212,3 +212,64 @@ projects:
 		t.Errorf("error should mention 'lables' typo: %v", err)
 	}
 }
+
+func TestParseRegistryM1Blocks(t *testing.T) {
+	reg, err := ParseRegistry(readTestdata(t, "valid.yaml"))
+	if err != nil {
+		t.Fatalf("ParseRegistry() error = %v, want nil", err)
+	}
+
+	t.Run("bot identity", func(t *testing.T) {
+		if got, want := reg.Bot.Email, "sentinel@example.invalid"; got != want {
+			t.Errorf("Bot.Email = %q, want %q", got, want)
+		}
+		if got, want := reg.Bot.Name, "triage-sentinel"; got != want {
+			t.Errorf("Bot.Name = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("transient patterns", func(t *testing.T) {
+		if len(reg.Triage.TransientPatterns) == 0 {
+			t.Fatal("Triage.TransientPatterns is empty, want the default set")
+		}
+	})
+
+	t.Run("per-project source roots", func(t *testing.T) {
+		if reg.Projects[0].Fingerprint == nil {
+			t.Fatal("Projects[0].Fingerprint = nil, want declared source_roots")
+		}
+		got := reg.Projects[0].Fingerprint.SourceRoots
+		want := []string{"cmd/", "internal/"}
+		if len(got) != len(want) {
+			t.Fatalf("SourceRoots = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("SourceRoots[%d] = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("absent fingerprint block stays nil", func(t *testing.T) {
+		if reg.Projects[1].Fingerprint != nil {
+			t.Error("Projects[1].Fingerprint is non-nil; an omitted block must stay nil so the denylist strategy is chosen")
+		}
+	})
+}
+
+func TestParseRegistryRejectsUnknownFingerprintField(t *testing.T) {
+	const y = `
+version: 1
+projects:
+  - slug: example-api
+    fingerprint:
+      source_rootz: ["src/"]
+`
+	_, err := ParseRegistry([]byte(y))
+	if err == nil {
+		t.Fatal("ParseRegistry() error = nil, want error for a mistyped key")
+	}
+	if !strings.Contains(err.Error(), "source_rootz") {
+		t.Errorf("error %q does not name the offending key", err.Error())
+	}
+}

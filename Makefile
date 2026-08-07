@@ -4,7 +4,7 @@ VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 LDFLAGS     := -s -w -X $(PKG)/internal/version.Version=$(VERSION)
 DATA_DIR    ?= ./var
 
-.PHONY: all build web test lint vet fmt fmt-check check dev run migrate clean install-service uninstall-service service-status logs
+.PHONY: all build web test lint vet fmt fmt-check check dev run migrate replay clean install-service uninstall-service service-status logs
 
 all: check build
 
@@ -52,6 +52,10 @@ run: build
 ## migrate: apply pending database migrations and exit
 migrate:
 	go run ./cmd/sentinel migrate
+
+## replay: feed a recorded payload through the ingest pipeline
+replay:
+	go run ./cmd/sentinel replay $(FILE)
 
 clean:
 	rm -rf bin internal/webassets/dist

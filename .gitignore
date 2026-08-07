@@ -45,6 +45,8 @@ AGENTS.override.md
 
 # Build output
 /bin/
+# The relay is a separate module; its local build lands here when built by hand
+/deploy/relay/relay
 
 # Runtime state (SPEC §13)
 /var/

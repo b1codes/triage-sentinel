@@ -119,3 +119,39 @@ func TestSlugsIsSorted(t *testing.T) {
 		}
 	}
 }
+
+func TestEffectiveProjectSourceRoots(t *testing.T) {
+	reg, err := ParseRegistry(readTestdata(t, "valid.yaml"))
+	if err != nil {
+		t.Fatalf("ParseRegistry() error = %v, want nil", err)
+	}
+
+	t.Run("declared roots are resolved", func(t *testing.T) {
+		eff, ok := reg.EffectiveProject("example-api")
+		if !ok {
+			t.Fatal("EffectiveProject(example-api) not found")
+		}
+		if len(eff.SourceRoots) != 2 {
+			t.Fatalf("SourceRoots = %v, want 2 entries", eff.SourceRoots)
+		}
+	})
+
+	t.Run("absent roots resolve to empty not nil-panic", func(t *testing.T) {
+		eff, ok := reg.EffectiveProject("example-worker")
+		if !ok {
+			t.Fatal("EffectiveProject(example-worker) not found")
+		}
+		if len(eff.SourceRoots) != 0 {
+			t.Errorf("SourceRoots = %v, want empty", eff.SourceRoots)
+		}
+	})
+
+	t.Run("caller cannot corrupt the registry", func(t *testing.T) {
+		eff, _ := reg.EffectiveProject("example-api")
+		eff.SourceRoots[0] = "clobbered"
+		again, _ := reg.EffectiveProject("example-api")
+		if again.SourceRoots[0] == "clobbered" {
+			t.Error("EffectiveProject returns a shared slice; a caller can corrupt the registry")
+		}
+	})
+}

@@ -56,6 +56,7 @@ func baseRegistry() Registry {
 			Tier2MinConfidence:  0.5,
 			MaxInputTokens:      40000,
 		},
+		Bot: Bot{Name: "triage-sentinel", Email: "sentinel@example.invalid"},
 		Projects: []Project{{
 			Slug:          "example-api",
 			Repo:          "github.com/example/example-api",
@@ -286,4 +287,100 @@ func TestLoadRegistryValidatesExampleFile(t *testing.T) {
 	if _, err := LoadRegistry("../../projects.example.yaml"); err != nil {
 		t.Fatalf("projects.example.yaml is invalid: %v", err)
 	}
+}
+
+func TestValidateM1Rules(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*Registry)
+		wantText string
+	}{
+		{
+			name:     "bot email missing",
+			mutate:   func(r *Registry) { r.Bot.Email = "" },
+			wantText: "bot.email",
+		},
+		{
+			name:     "bot email not an address",
+			mutate:   func(r *Registry) { r.Bot.Email = "not-an-email" },
+			wantText: "bot.email",
+		},
+		{
+			name:     "transient pattern does not compile",
+			mutate:   func(r *Registry) { r.Triage.TransientPatterns = []string{"([unclosed"} },
+			wantText: "transient_patterns",
+		},
+		{
+			name: "source root is absolute",
+			mutate: func(r *Registry) {
+				r.Projects[0].Fingerprint = &FingerprintConfig{SourceRoots: []string{"/etc/"}}
+			},
+			wantText: "source_roots",
+		},
+		{
+			name: "source root escapes the repo",
+			mutate: func(r *Registry) {
+				r.Projects[0].Fingerprint = &FingerprintConfig{SourceRoots: []string{"../other/"}}
+			},
+			wantText: "source_roots",
+		},
+		{
+			name: "source root is empty",
+			mutate: func(r *Registry) {
+				r.Projects[0].Fingerprint = &FingerprintConfig{SourceRoots: []string{"  "}}
+			},
+			wantText: "source_roots",
+		},
+		{
+			name: "fingerprint block present but declares nothing",
+			mutate: func(r *Registry) {
+				r.Projects[0].Fingerprint = &FingerprintConfig{}
+			},
+			wantText: "source_roots",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := baseRegistry()
+			reg.Bot = Bot{Name: "triage-sentinel", Email: "sentinel@example.invalid"}
+			tc.mutate(&reg)
+
+			err := reg.Validate()
+			if err == nil {
+				t.Fatal("Validate() error = nil, want error")
+			}
+			if !errors.Is(err, ErrInvalidRegistry) {
+				t.Errorf("errors.Is(err, ErrInvalidRegistry) = false, want true (err = %v)", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantText) {
+				t.Errorf("error %q does not mention %q", err.Error(), tc.wantText)
+			}
+		})
+	}
+}
+
+func TestCompileTransientPatterns(t *testing.T) {
+	t.Run("compiles and matches case-insensitively", func(t *testing.T) {
+		res, err := CompileTransientPatterns([]string{"(?i)ECONNRESET"})
+		if err != nil {
+			t.Fatalf("CompileTransientPatterns() error = %v, want nil", err)
+		}
+		if len(res) != 1 {
+			t.Fatalf("len = %d, want 1", len(res))
+		}
+		if !res[0].MatchString("read tcp: econnreset") {
+			t.Error("compiled pattern did not match a lowercase occurrence")
+		}
+	})
+
+	t.Run("names the offending pattern", func(t *testing.T) {
+		_, err := CompileTransientPatterns([]string{"(?i)fine", "([unclosed"})
+		if err == nil {
+			t.Fatal("error = nil, want error")
+		}
+		if !strings.Contains(err.Error(), "([unclosed") {
+			t.Errorf("error %q does not quote the bad pattern", err.Error())
+		}
+	})
 }

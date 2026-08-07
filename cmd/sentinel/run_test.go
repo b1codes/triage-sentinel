@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/b1codes/triage-sentinel/internal/config"
 	"github.com/b1codes/triage-sentinel/internal/httpapi"
 )
 
@@ -152,7 +153,7 @@ func TestRunServeShutsDownOnContextCancel(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- run(ctx, []string{
-			"serve", "-env-file", envFile, "-config", "../../projects.example.yaml",
+			"serve", "--no-ingest", "-env-file", envFile, "-config", "../../projects.example.yaml",
 		}, &bytes.Buffer{}, &bytes.Buffer{})
 	}()
 
@@ -251,7 +252,7 @@ func TestRunServeShutsDownPromptlyWithOpenSSEConnection(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- run(ctx, []string{
-			"serve", "-env-file", envFile, "-config", "../../projects.example.yaml",
+			"serve", "--no-ingest", "-env-file", envFile, "-config", "../../projects.example.yaml",
 		}, &stdout, &bytes.Buffer{})
 	}()
 
@@ -355,4 +356,80 @@ func timeoutAfter(t *testing.T) <-chan time.Time {
 
 func compareHash(hash, password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+}
+
+func TestServeRequiresIngestSecrets(t *testing.T) {
+	tests := []struct {
+		name    string
+		missing string
+	}{
+		{name: "no gcp project", missing: "GCP_PROJECT_ID"},
+		{name: "no subscription", missing: "PUBSUB_SUBSCRIPTION"},
+		{name: "no webhook secret", missing: "GITHUB_WEBHOOK_SECRET"},
+		{name: "no github token", missing: "GITHUB_TOKEN"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := completeIngestEnv()
+			delete(env, tc.missing)
+
+			err := assertIngestEnv(envFrom(env))
+			if err == nil {
+				t.Fatalf("assertIngestEnv() error = nil, want an error naming %s", tc.missing)
+			}
+			if !strings.Contains(err.Error(), tc.missing) {
+				t.Errorf("error %q does not name %s", err.Error(), tc.missing)
+			}
+		})
+	}
+}
+
+func TestAssertIngestEnvAcceptsCompleteEnvironment(t *testing.T) {
+	if err := assertIngestEnv(envFrom(completeIngestEnv())); err != nil {
+		t.Errorf("assertIngestEnv() error = %v, want nil", err)
+	}
+}
+
+func TestAssertIngestEnvReportsEveryProblemAtOnce(t *testing.T) {
+	err := assertIngestEnv(config.Env{})
+	if err == nil {
+		t.Fatal("assertIngestEnv() error = nil, want an error")
+	}
+	for _, want := range []string{
+		"GCP_PROJECT_ID", "PUBSUB_SUBSCRIPTION", "GITHUB_WEBHOOK_SECRET", "GITHUB_TOKEN",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %s; all problems must be reported at once", err.Error(), want)
+		}
+	}
+}
+
+func completeIngestEnv() map[string]string {
+	return map[string]string{
+		"GCP_PROJECT_ID":        "example-project",
+		"PUBSUB_SUBSCRIPTION":   "projects/example-project/subscriptions/sentinel",
+		"GITHUB_WEBHOOK_SECRET": "shhh",
+		"GITHUB_TOKEN":          "ghp_test",
+	}
+}
+
+func envFrom(m map[string]string) config.Env {
+	return config.Env{
+		GCPProjectID:        m["GCP_PROJECT_ID"],
+		PubSubSubscription:  m["PUBSUB_SUBSCRIPTION"],
+		GitHubWebhookSecret: m["GITHUB_WEBHOOK_SECRET"],
+		GitHubToken:         m["GITHUB_TOKEN"],
+	}
+}
+
+func TestNoIngestFlagIsParsed(t *testing.T) {
+	// --no-ingest must be an explicit opt-out. Silently skipping ingestion
+	// when credentials are absent would reproduce the exact silent failure
+	// SPEC §12 singles out.
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), []string{"version", "--no-ingest"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run() error = %v, want nil; --no-ingest must be a recognised flag", err)
+	}
 }

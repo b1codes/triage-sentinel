@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/b1codes/triage-sentinel/internal/store"
 	"github.com/b1codes/triage-sentinel/internal/sysinfo"
@@ -23,6 +24,9 @@ type HealthResponse struct {
 	SSEClients    int      `json:"sse_clients"`
 	Projects      int      `json:"projects"`
 	Problems      []string `json:"problems,omitempty"`
+
+	LastIngestAt *time.Time `json:"last_ingest_at,omitempty"`
+	IngestStale  bool       `json:"ingest_stale"`
 }
 
 // handleHealth reports process and host state. It is the only unauthenticated
@@ -65,6 +69,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.Problems = append(resp.Problems, "free disk unavailable: "+err.Error())
 	} else {
 		resp.FreeDiskBytes = free
+	}
+
+	// A stalled subscriber is the most likely silent failure in the system:
+	// the process looks healthy while seeing nothing (SPEC §12).
+	if at, ok, err := store.LastIngestAt(r.Context(), s.deps.DB); err != nil {
+		resp.Problems = append(resp.Problems, "ingest cursor unavailable: "+err.Error())
+	} else if !ok {
+		// Not a problem on a fresh install: nothing has arrived yet.
+		resp.IngestStale = false
+	} else {
+		resp.LastIngestAt = &at
+		if s.ingestIsStale(at) {
+			resp.IngestStale = true
+			resp.Problems = append(resp.Problems,
+				"no successful ingest since "+at.Format(time.RFC3339))
+		}
 	}
 
 	status := http.StatusOK

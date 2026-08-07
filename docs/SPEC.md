@@ -174,17 +174,31 @@ history; the `projects` table retains the row with `active = 0`.
 
 ### 4.2 `ingest` — ingestion router
 
-A streaming-pull Pub/Sub subscriber plus one adapter per source. Adapters implement:
+A REST long-polling Pub/Sub subscriber plus one adapter per source. Adapters implement:
 
 ```go
 type Adapter interface {
+    // Name identifies the adapter in logs and metrics.
+    Name() string
     // Match reports whether this adapter owns the message.
     Match(attrs map[string]string) bool
     // Normalize converts a raw message into a canonical event, or returns
     // ErrIgnore for messages that are structurally valid but uninteresting.
-    Normalize(ctx context.Context, m *pubsub.Message) (Event, error)
+    Normalize(ctx context.Context, m Message) (Event, error)
 }
 ```
+
+**Transport.** v1 pulls over the Pub/Sub REST API rather than gRPC StreamingPull.
+Measured at M1: `cloud.google.com/go/pubsub/v2` adds ~14 MB to the binary and takes the
+module graph from 32 to ~200, against the 15–25 MB RSS target this architecture exists to
+satisfy (§1.3). The ack-after-durable-write rule below removes the main reason to prefer the
+official client, because ack-deadline extension — the hardest part of a hand-rolled loop — is
+never needed when messages are acked within milliseconds of receipt. `Puller` is an interface,
+so a gRPC implementation remains a drop-in if volume ever justifies it.
+
+`returnImmediately` is deprecated and left unset, so the server holds a pull for a bounded
+time until a message is available; it may still return zero messages when that bound elapses,
+which is a normal outcome rather than an error.
 
 ```go
 type Event struct {
@@ -248,13 +262,16 @@ build/lint check.
 
 | Filter | Rejects |
 |---|---|
-| `Unroutable` | No matching project in the registry. |
 | `Quarantined` | Project is quarantined by a breaker. |
 | `Transient` | Configurable regex set: network timeouts, `ECONNRESET`, rate limits, runner-infrastructure failures, cancelled jobs. |
 | `SelfInflicted` | Commits authored by the sentinel's own bot identity — prevents self-referential repair loops. |
 | `Fingerprint` | Fingerprint seen within its suppression window (§4.3.2). |
-| `Duplicate` | `(source, source_ref)` already present. |
-| `BuildSanity` | Optional per-project `commands.healthcheck` fails for an environmental reason (missing dependency, not a code defect). |
+| `BuildSanity` | Optional per-project `commands.healthcheck` fails for an environmental reason (missing dependency, not a code defect). **Lands in M3**; ships as a registered no-op in M1, holding its chain position, because it needs a checkout and subprocess supervision that do not exist until then. |
+
+`Unroutable` and `Duplicate` are enforced at the **write boundary** rather than as chain
+members: by routing, and by the `incidents(source, source_ref)` unique index respectively.
+Both facts are established by the insert itself, so a chain member would re-query for what is
+already known and would race a concurrent duplicate delivery.
 
 Tier 0 must be cheap and total. Each filter is table-driven-tested with recorded real-world
 payloads under `testdata/`.
@@ -266,8 +283,30 @@ fingerprint = sha256(project_slug, error_class, normalize(top_n_frames))
 ```
 
 `normalize` strips absolute paths, line numbers, memory addresses, UUIDs, and timestamps;
-`top_n_frames` defaults to 5 and only considers frames within the project's own source tree,
-so a shared dependency's stack does not collapse unrelated bugs together.
+`top_n_frames` defaults to 5.
+
+Frame selection runs three steps and records which produced the result:
+
+1. `source_roots` — the project declares them in the registry. Closed set, preferred.
+2. `denylist` — no roots declared; frames outside known dependency directories. Open-ended,
+   best effort.
+3. `all_frames` — steps 1–2 selected nothing; use the top N frames including dependencies.
+
+Step 3 is not a fallback of convenience. The two failure modes are asymmetric: over-collapse
+silently suppresses a real failure for a whole window with **no backstop**, while
+under-collapse merely costs money that every budget ceiling bounds. An empty frame set hashes
+to `sha256(slug, class, "")` and collapses every same-class failure in a project — the unbacked
+mode, reached by the most common path. **When frame classification is uncertain, fingerprint
+more specifically, never less.**
+
+The chosen strategy and the frames that produced the hash are persisted on the fingerprint
+(`strategy`, `frames_json`), so grouping quality can be tuned from evidence rather than guessed
+at.
+
+Fingerprint inputs differ by source. `log.error` uses stack frames; `workflow_run.failed` uses
+the failing **job and step** names, because grouping on the workflow name alone would collapse
+every failure of one workflow into a single incident; `issues.*` are not fingerprinted at all,
+since human-filed issues are not storms and `source_ref` already deduplicates them.
 
 The first event for a fingerprint opens an incident and starts a **suppression window**
 (default 6 h, per-project override). Subsequent events for the same fingerprint within the
@@ -575,6 +614,10 @@ Pragmas at open: `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`,
 `busy_timeout=5000`. One writer connection (`SetMaxOpenConns(1)` on a dedicated write handle)
 plus a separate read pool — this eliminates `SQLITE_BUSY` by construction rather than by retry.
 
+The schema is applied as **two forward-only migrations**: `0001_init.sql` creates every table
+below, and `0002_fingerprint_evidence.sql` adds `fingerprints.strategy` and
+`fingerprints.frames_json` (§4.3.2). The DDL shown here is the current cumulative shape.
+
 Migrations are numbered, embedded via `//go:embed`, forward-only, and applied in a transaction
 at startup.
 
@@ -641,7 +684,13 @@ CREATE TABLE fingerprints (
   suppress_until      TEXT NOT NULL,
   total_occurrences   INTEGER NOT NULL DEFAULT 1,
   repair_attempts     INTEGER NOT NULL DEFAULT 0,
-  total_cost_usd      REAL NOT NULL DEFAULT 0
+  total_cost_usd      REAL NOT NULL DEFAULT 0,
+  -- Added by migration 0002. One of:
+  -- source_roots | denylist | all_frames | workflow | no_frames.
+  strategy            TEXT NOT NULL DEFAULT 'unknown',
+  -- The normalised frames that produced the hash, as a JSON array of strings.
+  -- Without these it is impossible to tell why two errors collapsed (§4.3.2).
+  frames_json         TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE agent_runs (
@@ -845,6 +894,23 @@ runtime:
   tier2_min_confidence: 0.5
   max_input_tokens: 40000
 
+# The sentinel's own git identity. bot.email is required and must parse as an
+# address: the Tier 0 SelfInflicted filter matches on it, so an empty value
+# would silently disable the self-repair-loop guard (§4.3.1, §4.9).
+bot:
+  name: triage-sentinel
+  email: sentinel@example.invalid
+
+# Tier 0 tuning that is not per-project. Patterns compile at load, so a
+# malformed regex refuses startup rather than failing on the first real event.
+triage:
+  transient_patterns:
+    - "(?i)connection reset by peer"
+    - "(?i)ECONNRESET"
+    - "(?i)rate limit"
+    - "(?i)the runner has received a shutdown signal"
+    - "(?i)the operation was canceled"
+
 projects:
   - slug: example-api
     repo: github.com/example/example-api
@@ -865,6 +931,15 @@ projects:
       rollback: make rollback
     env:
       DATABASE_URL: postgres://localhost/example_test
+    # Optional. Declaring source roots selects the strongest frame-selection
+    # strategy (§4.3.2 step 1). Omitting the block falls back to the dependency
+    # denylist. A present-but-empty block is an error: a root that can never
+    # match would silently demote the project without anyone knowing which
+    # strategy was in use.
+    fingerprint:
+      source_roots:
+        - "cmd/"
+        - "internal/"
 ```
 
 ### 6.3 Application contract
@@ -1176,15 +1251,58 @@ Gitignored agent files: CLAUDE.md, CLAUDE.local.md, AGENTS.override.md,
 Each milestone gets its own implementation plan and build cycle. Milestones are ordered so that
 every one ends with something runnable.
 
+### Verification status: no live credentials
+
+**As of 2026-08-06 the development environment has no GCP project, GitHub token, webhook
+secret, or Pub/Sub subscription.** Every milestone from M1 onward has a *Done when* clause
+that can only be settled against real infrastructure, so each plan must separate two kinds of
+acceptance and report them separately:
+
+| | Runs without credentials | Needs live infrastructure |
+|---|---|---|
+| M1 | Storm collapse, distinct-bug separation, $0.00 spend, restart recovery | Real events appearing within seconds; end-to-end latency |
+| M2+ | Classifier and ledger logic against recorded fixtures | Real spend against the Anthropic API; real notifier delivery |
+
+Two rules follow, and they apply to every future plan:
+
+1. **A milestone may ship with live checks outstanding, but never with them silently
+   assumed.** Record which checks were not run, and why, in the milestone's final commit.
+2. **Never substitute a mock for a live check and report the criterion satisfied.** The
+   seams these checks cover — Pub/Sub retention across a restart, real webhook signatures,
+   real Actions API job lookup, real token accounting — are precisely the ones unit tests
+   cannot reach. Treating them as covered means the first real event is also the first test.
+
+M1's outstanding checklist is Task 21 step 4 of
+`docs/superpowers/plans/2026-08-02-m1-ingestion.md`. Run it when credentials arrive, before
+M2 begins spending against these groupings.
+
+Development paths that work without credentials: `sentinel serve --no-ingest` for dashboard
+work, and `sentinel replay <file>` to feed a recorded payload through the real adapters and
+process loop.
+
 **M0 — Skeleton.** `config` with validation, `store` with migrations, HTTP server, embedded SPA
 shell, SSE hub, `/api/health`, launchd plist. *Done when:* the binary runs as a background
 service, serves a dashboard shell, and survives a reboot.
 
 **M1 — Ingestion.** Pub/Sub subscriber, GitHub relay, both adapters, fingerprinting and
-suppression, all Tier 0 filters, incident persistence, live feed in the UI. *Done when:* real
-GitHub and GCP events appear in the dashboard within seconds, storms collapse correctly, and
-the system has spent $0.00. **M1 alone is a useful product — a live NOC for 25 repositories at
-no marginal cost.**
+suppression, Tier 0 filters (`BuildSanity` as a registered no-op until M3), incident
+persistence, live feed in the UI. *Done when:* real GitHub and GCP events appear in the
+dashboard within seconds, storms collapse correctly, and the system has spent $0.00.
+**M1 alone is a useful product — a live NOC for 25 repositories at no marginal cost.**
+
+*Status:* implemented and merged 2026-08-06. Storm collapse, distinct-bug separation and
+$0.00 spend are verified by test; **the live-event clause is not yet verified** — see the
+credentials note above.
+
+`GITHUB_TOKEN` is required **from M1, not M4** — earlier than this table previously implied.
+Job-level fingerprinting reads the Actions API (`GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs`)
+because the `workflow_run` webhook payload carries the run but not its failing job and step,
+and grouping on the workflow name alone would collapse every `ci.yml` failure into a single
+incident (§4.3.2). **Read scope only**; M4 remains the first milestone that needs write.
+
+Incidents surviving Tier 0 come to rest in `triaging`. M1 has no Tier 1, so nothing processes
+them further until M2 — the dashboard states this plainly rather than implying a queue is
+being worked.
 
 **M2 — Triage & money.** Tier 1 classifier, price table, ledger, all window counters, the full
 threshold ladder, soft mode with parking, efficiency and forecast signals, digest generation,
