@@ -114,11 +114,17 @@ the sentinel binary at ~12 MB with 34 modules and no gRPC at all.
 | | Milestone | Status |
 |---|---|---|
 | M0 | Skeleton — config, store, HTTP, SSE, launchd | ✅ Done |
-| M1 | Ingestion — adapters, fingerprinting, suppression, live feed | ✅ Done |
+| M1 | Ingestion — adapters, fingerprinting, suppression, live feed | ✅ Done¹ |
 | M2 | Triage & money — Tier 1 classifier, ledger, budget ladder | Next |
 | M3 | Repair — workspace, runner, patch application | |
 | M4 | Delivery — PRs, auto-merge, deploy and rollback | |
 | M5 | Hardening — audit, probation, full observability |  |
+
+¹ M1's behaviour is verified by test — storm collapse, distinct-bug separation, restart
+recovery, $0.00 spend. Its **live-infrastructure checks have not been run**, because no GCP or
+GitHub credentials are available yet. The outstanding checklist is Task 21 step 4 of
+`docs/superpowers/plans/2026-08-02-m1-ingestion.md`; run it before starting M2. See SPEC §14
+for the rule this follows.
 
 See [`docs/SPEC.md`](docs/SPEC.md) for the full specification.
 

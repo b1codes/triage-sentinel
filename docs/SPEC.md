@@ -1251,6 +1251,35 @@ Gitignored agent files: CLAUDE.md, CLAUDE.local.md, AGENTS.override.md,
 Each milestone gets its own implementation plan and build cycle. Milestones are ordered so that
 every one ends with something runnable.
 
+### Verification status: no live credentials
+
+**As of 2026-08-06 the development environment has no GCP project, GitHub token, webhook
+secret, or Pub/Sub subscription.** Every milestone from M1 onward has a *Done when* clause
+that can only be settled against real infrastructure, so each plan must separate two kinds of
+acceptance and report them separately:
+
+| | Runs without credentials | Needs live infrastructure |
+|---|---|---|
+| M1 | Storm collapse, distinct-bug separation, $0.00 spend, restart recovery | Real events appearing within seconds; end-to-end latency |
+| M2+ | Classifier and ledger logic against recorded fixtures | Real spend against the Anthropic API; real notifier delivery |
+
+Two rules follow, and they apply to every future plan:
+
+1. **A milestone may ship with live checks outstanding, but never with them silently
+   assumed.** Record which checks were not run, and why, in the milestone's final commit.
+2. **Never substitute a mock for a live check and report the criterion satisfied.** The
+   seams these checks cover — Pub/Sub retention across a restart, real webhook signatures,
+   real Actions API job lookup, real token accounting — are precisely the ones unit tests
+   cannot reach. Treating them as covered means the first real event is also the first test.
+
+M1's outstanding checklist is Task 21 step 4 of
+`docs/superpowers/plans/2026-08-02-m1-ingestion.md`. Run it when credentials arrive, before
+M2 begins spending against these groupings.
+
+Development paths that work without credentials: `sentinel serve --no-ingest` for dashboard
+work, and `sentinel replay <file>` to feed a recorded payload through the real adapters and
+process loop.
+
 **M0 — Skeleton.** `config` with validation, `store` with migrations, HTTP server, embedded SPA
 shell, SSE hub, `/api/health`, launchd plist. *Done when:* the binary runs as a background
 service, serves a dashboard shell, and survives a reboot.
@@ -1260,6 +1289,10 @@ suppression, Tier 0 filters (`BuildSanity` as a registered no-op until M3), inci
 persistence, live feed in the UI. *Done when:* real GitHub and GCP events appear in the
 dashboard within seconds, storms collapse correctly, and the system has spent $0.00.
 **M1 alone is a useful product — a live NOC for 25 repositories at no marginal cost.**
+
+*Status:* implemented and merged 2026-08-06. Storm collapse, distinct-bug separation and
+$0.00 spend are verified by test; **the live-event clause is not yet verified** — see the
+credentials note above.
 
 `GITHUB_TOKEN` is required **from M1, not M4** — earlier than this table previously implied.
 Job-level fingerprinting reads the Actions API (`GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs`)
